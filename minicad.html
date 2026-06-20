@@ -1,0 +1,1656 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MiniCAD — d3.js</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<style>
+  :root{
+    --bg:#16191d;          /* fondo general */
+    --panel:#1f242a;       /* paneles */
+    --panel2:#272d34;
+    --canvas:#212830;      /* espacio modelo */
+    --line:#e8eaed;        /* trazo de entidades */
+    --preview:#21c7d6;     /* cian de previsualización */
+    --accent:#21c7d6;
+    --sel:#ffb01f;         /* selección ámbar */
+    --grid-minor:#2c343d;
+    --grid-major:#3a4450;
+    --text:#cfd6dd;
+    --muted:#7d8893;
+    --mono:"Cascadia Code", ui-monospace, "JetBrains Mono", Consolas, monospace;
+    --sans:"Segoe UI", system-ui, sans-serif;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%; overflow:hidden; background:var(--bg); color:var(--text); font-family:var(--sans);}
+  #app{display:flex; flex-direction:column; height:100%;}
+
+  /* ---------- Barra de herramientas ---------- */
+  #toolbar{
+    display:flex; align-items:center; gap:6px; padding:6px 10px;
+    background:var(--panel); border-bottom:1px solid #000;
+    user-select:none; flex-wrap:wrap;
+  }
+  #logo{font-family:var(--mono); font-weight:700; letter-spacing:.08em;
+    color:var(--accent); margin-right:10px; font-size:14px;}
+  #logo span{color:var(--text); font-weight:400;}
+  .tbtn{
+    background:var(--panel2); border:1px solid #343c45; color:var(--text);
+    padding:6px 12px; border-radius:4px; cursor:pointer; font-size:12.5px;
+    display:flex; align-items:center; gap:6px; transition:background .12s, border-color .12s;
+  }
+  .tbtn:hover{background:#313a44;}
+  .tbtn.active{background:#0e4a52; border-color:var(--accent); color:#bdf3f8;}
+  .tbtn kbd{font-family:var(--mono); font-size:10px; color:var(--muted);
+    border:1px solid #3c454f; border-radius:3px; padding:0 4px;}
+  .tbtn.active kbd{color:#8adfe8; border-color:#1b7c88;}
+  .sep{width:1px; height:22px; background:#343c45; margin:0 4px;}
+
+  /* ---------- Lienzo ---------- */
+  #viewport{flex:1; position:relative; min-height:0;}
+  svg#canvas{position:absolute; inset:0; width:100%; height:100%;
+    background:var(--canvas); cursor:none; display:block;}
+
+  .shape-main{stroke-width:1.4px; fill:none; vector-effect:non-scaling-stroke;}
+  .shape-hit{stroke:transparent; stroke-width:12px; fill:none; vector-effect:non-scaling-stroke; pointer-events:stroke;}
+  g.shape.selected .shape-main{stroke:var(--sel) !important; stroke-dasharray:6 4;}
+  .preview{stroke:var(--preview); stroke-width:1.2px; fill:none;
+    stroke-dasharray:5 4; vector-effect:non-scaling-stroke; pointer-events:none;}
+  .axis-x{stroke:#c0392b;} .axis-y{stroke:#27ae60;}
+  .axis{stroke-width:1.2px; vector-effect:non-scaling-stroke; opacity:.85;}
+  .gridline{vector-effect:non-scaling-stroke;}
+  .crosshair line{stroke:#9aa6b1; stroke-width:1px;}
+  .crosshair rect{stroke:#9aa6b1; fill:none; stroke-width:1px;}
+  .osnap{stroke:#58d68d; fill:none; stroke-width:1.6px;}
+  .osnap-label{fill:#58d68d; font:10px var(--mono); stroke:none;}
+  .dim-line{stroke-width:1px;}
+  .dim-arrow{stroke:none;}
+  .dim-text{font-family:var(--mono); text-anchor:middle; stroke:none;}
+  g.shape.selected .dim-arrow{fill:var(--sel) !important;}
+  g.shape.selected .dim-text{fill:var(--sel) !important;}
+  .dim-prev .dim-arrow{fill:var(--preview) !important;}
+  .dim-prev .dim-text{fill:var(--preview) !important;}
+
+  .hatch-fill{stroke:none;}
+  g.hatch.selected .hatch-fill{stroke:var(--sel) !important; stroke-dasharray:6 4;
+    stroke-width:1.4px; vector-effect:non-scaling-stroke;}
+  .marquee-window{fill:rgba(64,128,255,.14); stroke:#5b8def; stroke-width:1px;}
+  .marquee-crossing{fill:rgba(70,200,120,.13); stroke:#58d68d; stroke-width:1px; stroke-dasharray:5 4;}
+
+  /* ---------- Panel de capas ---------- */
+  #layerPanel{position:absolute; top:12px; right:12px; width:300px; background:var(--panel);
+    border:1px solid #343c45; border-radius:6px; box-shadow:0 10px 28px rgba(0,0,0,.55);
+    font-size:12px; z-index:10; user-select:none;}
+  #lpHead{display:flex; justify-content:space-between; align-items:center; padding:8px 10px;
+    font-family:var(--mono); letter-spacing:.12em; font-size:11px; color:var(--accent);
+    border-bottom:1px solid #343c45;}
+  #lpClose{cursor:pointer; color:var(--muted); font-size:13px;}
+  #lpClose:hover{color:#fff;}
+  .lprow{display:flex; align-items:center; gap:5px; padding:5px 8px; border-bottom:1px solid #2a313a;}
+  .lprow.current{background:#0e3a40;}
+  .lprow input[type=color]{width:24px; height:18px; padding:0; border:1px solid #343c45;
+    background:none; cursor:pointer; border-radius:3px;}
+  .lpname{flex:1; min-width:0; background:transparent; border:1px solid transparent; color:var(--text);
+    font-family:var(--mono); font-size:12px; padding:2px 5px; border-radius:3px;}
+  .lpname:focus{outline:none; border-color:var(--accent); background:#1a2026;}
+  .lpbtn{background:none; border:none; cursor:pointer; font-size:13px; color:var(--muted);
+    padding:1px 3px; line-height:1;}
+  .lpbtn:hover{color:#fff;}
+  .lpbtn.on{color:var(--accent);}
+  .lpbtn.warn:hover{color:#ff7a6e;}
+  #lpFoot{display:flex; gap:6px; padding:8px;}
+  #lpFoot .tbtn{flex:1; justify-content:center; font-size:12px;}
+  #layerSwatch{width:11px; height:11px; border-radius:2px; display:inline-block;
+    background:var(--line); border:1px solid rgba(255,255,255,.25);}
+
+  /* ---------- Línea de comandos ---------- */
+  #cmdpanel{background:var(--panel); border-top:1px solid #000; font-family:var(--mono);}
+  #history{height:74px; overflow-y:auto; padding:4px 10px; font-size:12px;
+    color:var(--muted); line-height:1.55;}
+  #history .echo{color:var(--text);}
+  #history .err{color:#ff7a6e;}
+  #history .ok{color:#7fd9a3;}
+  #cmdline{display:flex; align-items:center; gap:8px; padding:6px 10px;
+    background:var(--panel2); border-top:1px solid #343c45;}
+  #prompt{color:var(--accent); font-size:12.5px; white-space:nowrap;}
+  #cmd{flex:1; background:transparent; border:none; outline:none; color:#fff;
+    font-family:var(--mono); font-size:13px; caret-color:var(--accent);}
+
+  /* ---------- Barra de estado ---------- */
+  #status{display:flex; align-items:center; gap:0; background:var(--panel);
+    border-top:1px solid #000; font-family:var(--mono); font-size:11.5px;
+    color:var(--muted); user-select:none;}
+  #coords{padding:5px 14px; min-width:220px; color:var(--text);}
+  .toggle{padding:5px 12px; border-left:1px solid #343c45; cursor:pointer;}
+  .toggle.on{color:var(--accent);}
+  .toggle:hover{background:#2b323a;}
+  #hint{margin-left:auto; padding:5px 14px; font-family:var(--sans); font-size:11px;}
+  @media (max-width:720px){ #hint{display:none;} #coords{min-width:140px;} }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="toolbar">
+    <div id="logo">MINI<span>CAD</span></div>
+    <button class="tbtn" data-tool="select" title="Seleccionar entidades">⬚ Seleccionar <kbd>S</kbd></button>
+    <div class="sep"></div>
+    <button class="tbtn" data-tool="line">／ Línea <kbd>L</kbd></button>
+    <button class="tbtn" data-tool="circle">◯ Círculo <kbd>C</kbd></button>
+    <button class="tbtn" data-tool="rect">▭ Rectángulo <kbd>R</kbd></button>
+    <button class="tbtn" data-tool="dim">⟷ Cota <kbd>D</kbd></button>
+    <button class="tbtn" data-tool="hatch">▨ Sombreado <kbd>H</kbd></button>
+    <button class="tbtn" data-tool="trim">✂ Recortar <kbd>T</kbd></button>
+    <button class="tbtn" data-tool="break">⊟ Parte <kbd>X</kbd></button>
+    <div class="sep"></div>
+    <button class="tbtn" id="btnLayers" title="Administrador de capas (CAPA)">
+      <span id="layerSwatch"></span> <span id="layerName">0</span> ▾
+    </button>
+    <div class="sep"></div>
+    <button class="tbtn" id="btnErase">✕ Borrar selección</button>
+    <button class="tbtn" id="btnClear">Limpiar todo</button>
+    <div class="sep"></div>
+    <button class="tbtn" id="btnExtents">⤢ Zoom extensión</button>
+    <div class="sep"></div>
+    <button class="tbtn" id="btnOpenDxf" title="Abrir un archivo DXF de AutoCAD">📂 Abrir DXF</button>
+    <input type="file" id="dxfInput" accept=".dxf,.DXF" hidden>
+  </div>
+
+  <div id="viewport">
+    <svg id="canvas"></svg>
+    <div id="layerPanel" hidden>
+      <div id="lpHead">ADMINISTRADOR DE CAPAS <span id="lpClose" title="Cerrar">✕</span></div>
+      <div id="lpList"></div>
+      <div id="lpFoot">
+        <button class="tbtn" id="lpAdd">＋ Nueva capa</button>
+        <button class="tbtn" id="lpMove" title="Mover las entidades seleccionadas a la capa actual">⇪ Selección → actual</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="cmdpanel">
+    <div id="history"></div>
+    <div id="cmdline">
+      <span id="prompt">Comando:</span>
+      <input id="cmd" autocomplete="off" spellcheck="false"
+             placeholder="L, C, R...  ·  coordenadas: 10,20  ·  @5,5  ·  @10<45">
+    </div>
+  </div>
+
+  <div id="status">
+    <div id="coords">0.00, 0.00</div>
+    <div class="toggle on" id="tgSnap" title="F9">FORZC</div>
+    <div class="toggle on" id="tgOsnap" title="F3 — Referencia a entidades (fin, medio, centro)">REFENT</div>
+    <div class="toggle" id="tgOrtho" title="F8">ORTO</div>
+    <div class="toggle on" id="tgGrid" title="F7">REJILLA</div>
+    <div id="hint">Rueda: zoom · Botón central: encuadre · En Seleccionar arrastre izq→der ventana / der→izq captura · Esc: cancelar</div>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   MiniCAD — CAD 2D mínimo con d3.js
+   Sistema de coordenadas: Y hacia arriba (como AutoCAD).
+   ===================================================================== */
+
+const svg      = d3.select('#canvas');
+const svgNode  = svg.node();
+const defs     = svg.append('defs');                                // patrones de sombreado
+const gZoom    = svg.append('g');                                   // capa con transform de zoom/encuadre
+const gWorld   = gZoom.append('g').attr('transform','scale(1,-1)'); // voltea Y (mundo CAD)
+const gGrid    = gWorld.append('g');
+const gAxes    = gWorld.append('g');
+const gHatch   = gWorld.append('g');                                // sombreados, debajo de las entidades
+const gShapes  = gWorld.append('g');
+const gPreview = gWorld.append('g');
+const gScreen  = svg.append('g').attr('class','crosshair');         // capa en pantalla (cursor)
+const gMarquee = svg.append('g');                                   // rectángulo de selección por ventana
+
+/* ---------------- Estado ---------------- */
+let shapes   = [];        // {id, type, ...geometría}
+let nextId   = 1;
+let tool     = 'select';  // select | line | circle | rect
+let pending  = [];        // puntos acumulados del comando activo
+let lastPt   = null;      // último punto introducido (para @relativas)
+let mouseW   = {x:0, y:0};
+let lastCmd  = null;
+let snapOn   = true, orthoOn = false, gridOn = true;
+let osnapOn  = true;      // referencia a entidades (fin / medio / centro)
+let osnapHit = null;      // {x, y, kind} del punto de referencia bajo el cursor
+
+/* ---------------- Capas ---------------- */
+let layers = [{id:0, name:'0', color:'#e8eaed', visible:true, locked:false}];
+let nextLayerId  = 1;
+let currentLayer = 0;
+const LAYER_PALETTE = ['#ff5252','#ffd740','#69f0ae','#40c4ff','#e040fb','#ffab40','#64ffda','#b2ff59'];
+const layerOf = s => layers.find(l => l.id === (s.layer ?? 0)) || layers[0];
+const layerById = id => layers.find(l => l.id === id) || layers[0];
+
+/* ---------------- Sombreado (hatch) ---------------- */
+const HATCH_PATTERNS = ['solido','horizontal','ansi31','cruz','puntos'];
+const HATCH_LABEL = {solido:'SÓLIDO', horizontal:'HORIZONTAL', ansi31:'ANSI31', cruz:'CRUZ', puntos:'PUNTOS'};
+let hatchPattern = 'solido';
+let hatchScale   = 1;
+let minorStep = 1;        // paso de rejilla menor actual (también paso de forzcursor)
+
+const cmdInput = document.getElementById('cmd');
+const promptEl = document.getElementById('prompt');
+const histEl   = document.getElementById('history');
+
+/* ---------------- Utilidades ---------------- */
+const fmt  = n => (Math.round(n*100)/100).toFixed(2);
+const dist = (a,b) => Math.hypot(b.x-a.x, b.y-a.y);
+
+function log(msg, cls=''){
+  const d = document.createElement('div');
+  if(cls) d.className = cls;
+  d.textContent = msg;
+  histEl.appendChild(d);
+  histEl.scrollTop = histEl.scrollHeight;
+}
+function setPrompt(t){ promptEl.textContent = t; }
+
+/* ---------------- Zoom / encuadre ---------------- */
+const zoom = d3.zoom()
+  .scaleExtent([0.02, 400])
+  .filter(ev => {
+    if (ev.type === 'wheel') return true;
+    if (ev.type === 'dblclick') return false;
+    return ev.button === 1;   // encuadre solo con botón central (izq. = ventana de selección)
+  })
+  .on('zoom', ev => { gZoom.attr('transform', ev.transform); drawGrid(); render(); renderPreview(); });
+
+svg.call(zoom).on('dblclick.zoom', null);
+
+function viewSize(){ const r = svgNode.getBoundingClientRect(); return [r.width, r.height]; }
+
+function initialView(){
+  const [w,h] = viewSize();
+  const k = 24; // 1 unidad = 24 px
+  const t = d3.zoomIdentity.translate(w*0.32, h*0.68).scale(k);
+  svg.call(zoom.transform, t);
+}
+
+function screenToWorld(mx, my){
+  const t = d3.zoomTransform(svgNode);
+  const p = t.invert([mx, my]);
+  return {x:p[0], y:-p[1]};
+}
+
+/* ---------------- Rejilla adaptativa + ejes ---------------- */
+function drawGrid(){
+  const t = d3.zoomTransform(svgNode);
+  const [w,h] = viewSize();
+  const a = t.invert([0,0]), b = t.invert([w,h]);
+  const x0=a[0], x1=b[0], yTop=-a[1], yBot=-b[1];     // mundo (Y arriba)
+  const yMin=Math.min(yTop,yBot), yMax=Math.max(yTop,yBot);
+
+  // paso menor: entre ~8 y ~80 px en pantalla, en potencias de 10
+  minorStep = Math.pow(10, Math.ceil(Math.log10(8 / t.k)));
+  const major = minorStep * 10;
+
+  gGrid.selectAll('*').remove();
+  if(!gridOn) { drawAxes(x0,x1,yMin,yMax); return; }
+
+  const lines = [];
+  for(let x = Math.floor(x0/minorStep)*minorStep; x <= x1; x += minorStep)
+    lines.push({x1:x, y1:yMin, x2:x, y2:yMax, major: Math.abs(x % major) < minorStep/2});
+  for(let y = Math.floor(yMin/minorStep)*minorStep; y <= yMax; y += minorStep)
+    lines.push({x1:x0, y1:y, x2:x1, y2:y, major: Math.abs(y % major) < minorStep/2});
+
+  gGrid.selectAll('line').data(lines).join('line')
+    .attr('class','gridline')
+    .attr('x1',d=>d.x1).attr('y1',d=>d.y1)
+    .attr('x2',d=>d.x2).attr('y2',d=>d.y2)
+    .attr('stroke', d => d.major ? 'var(--grid-major)' : 'var(--grid-minor)')
+    .attr('stroke-width', d => d.major ? 1 : 0.5);
+
+  drawAxes(x0,x1,yMin,yMax);
+}
+function drawAxes(x0,x1,yMin,yMax){
+  gAxes.selectAll('*').remove();
+  gAxes.append('line').attr('class','axis axis-x')
+    .attr('x1',x0).attr('y1',0).attr('x2',x1).attr('y2',0);
+  gAxes.append('line').attr('class','axis axis-y')
+    .attr('x1',0).attr('y1',yMin).attr('x2',0).attr('y2',yMax);
+}
+
+/* ---------------- Cursor en cruz ---------------- */
+function drawCrosshair(mx,my){
+  const [w,h] = viewSize();
+  const s = 5; // medio lado del cuadro de selección
+  gScreen.selectAll('*').remove();
+  if(mx==null) return;
+  gScreen.append('line').attr('x1',0).attr('y1',my).attr('x2',w).attr('y2',my);
+  gScreen.append('line').attr('x1',mx).attr('y1',0).attr('x2',mx).attr('y2',h);
+  gScreen.append('rect').attr('x',mx-s).attr('y',my-s).attr('width',s*2).attr('height',s*2);
+  drawOsnapMarker();
+}
+
+/* Marcador del punto de referencia: ▢ fin · △ medio · ◯ centro · ◇ cuadrante */
+function drawOsnapMarker(){
+  if(!osnapHit) return;
+  const t = d3.zoomTransform(svgNode);
+  const [sx,sy] = t.apply([osnapHit.x, -osnapHit.y]);
+  const r = 6;
+  if(osnapHit.kind==='fin')
+    gScreen.append('rect').attr('class','osnap')
+      .attr('x',sx-r).attr('y',sy-r).attr('width',r*2).attr('height',r*2);
+  else if(osnapHit.kind==='medio')
+    gScreen.append('path').attr('class','osnap')
+      .attr('d',`M ${sx} ${sy-r} L ${sx+r} ${sy+r} L ${sx-r} ${sy+r} Z`);
+  else if(osnapHit.kind==='centro')
+    gScreen.append('circle').attr('class','osnap')
+      .attr('cx',sx).attr('cy',sy).attr('r',r);
+  else // cuadrante
+    gScreen.append('path').attr('class','osnap')
+      .attr('d',`M ${sx} ${sy-r} L ${sx+r} ${sy} L ${sx} ${sy+r} L ${sx-r} ${sy} Z`);
+  gScreen.append('text').attr('class','osnap-label')
+    .attr('x',sx+10).attr('y',sy+18)
+    .text({fin:'Punto final', medio:'Punto medio', centro:'Centro', cuadrante:'Cuadrante'}[osnapHit.kind]);
+}
+
+/* ---------------- Render de entidades ---------------- */
+function render(){
+  const visibles = shapes.filter(s => layerOf(s).visible);
+  const onShapeClick = (ev,d)=>{
+    if(justMarqueed){ ev.stopPropagation(); justMarqueed = false; return; }
+    if(tool==='trim'){ ev.stopPropagation(); trimEntity(d, mouseW); return; }
+    if(tool==='break' && !breakState){ ev.stopPropagation(); breakFirst(d, cursorPoint(null)); return; }
+    if(tool!=='select') return;   // en modo sombreado el clic pasa al lienzo (punto interior)
+    ev.stopPropagation();
+    if(layerOf(d).locked){ log(`La capa "${layerOf(d).name}" está bloqueada.`); return; }
+    d.selected = !d.selected;
+    render();
+  };
+
+  // sombreados: capa inferior, reconstruidos en cada pasada
+  const hj = gHatch.selectAll('g.hatch')
+    .data(visibles.filter(s=>s.type==='hatch'), d=>d.id);
+  hj.enter().append('g').attr('class','hatch').on('click', onShapeClick);
+  hj.exit().remove();
+  gHatch.selectAll('g.hatch')
+    .classed('selected', d=>!!d.selected)
+    .each(function(d){ buildHatch(d3.select(this), d); });
+
+  const g = gShapes.selectAll('g.shape')
+    .data(visibles.filter(s=>s.type!=='hatch'), d=>d.id);
+  const ge = g.enter().append('g').attr('class','shape').on('click', onShapeClick);
+  ge.each(function(d){
+    const sel = d3.select(this);
+    if(d.type==='dim') return;                 // las cotas se construyen completas en cada pasada
+    for(const cls of ['shape-hit','shape-main']){
+      if(d.type==='line')   sel.append('line').attr('class',cls);
+      if(d.type==='circle') sel.append('circle').attr('class',cls);
+      if(d.type==='rect')   sel.append('rect').attr('class',cls);
+    }
+  });
+  g.exit().remove();
+
+  gShapes.selectAll('g.shape')
+    .classed('selected', d=>!!d.selected)
+    .each(function(d){
+      const sel = d3.select(this);
+      const col = layerOf(d).color;
+      if(d.type==='dim'){ buildDim(sel, d); return; }
+      if(d.type==='line')
+        sel.selectAll('line').attr('x1',d.x1).attr('y1',d.y1).attr('x2',d.x2).attr('y2',d.y2);
+      if(d.type==='circle')
+        sel.selectAll('circle').attr('cx',d.cx).attr('cy',d.cy).attr('r',d.r);
+      if(d.type==='rect')
+        sel.selectAll('rect').attr('x',d.x).attr('y',d.y).attr('width',d.w).attr('height',d.h);
+      sel.select('.shape-main').attr('stroke', col);
+    });
+}
+
+/* ---------------- Sombreado: patrones, contornos y aplicación ----------------
+   Los patrones se definen en unidades de mundo (userSpaceOnUse), así escalan
+   con el zoom igual que un sombreado de AutoCAD en espacio modelo.            */
+function ensurePattern(pat, color, scale){
+  if(pat==='solido') return color;
+  const key = `h-${pat}-${color.replace('#','')}-${String(scale).replace(/\./g,'_')}`;
+  if(!document.getElementById(key)){
+    const s = 0.9*scale, sw = 0.06*scale;
+    const p = defs.append('pattern').attr('id',key)
+      .attr('patternUnits','userSpaceOnUse')
+      .attr('width',s).attr('height',s);
+    if(pat==='ansi31'){
+      p.attr('patternTransform','rotate(45)');
+      p.append('line').attr('x1',0).attr('y1',0).attr('x2',s).attr('y2',0)
+        .attr('stroke',color).attr('stroke-width',sw);
+    } else if(pat==='horizontal'){
+      p.append('line').attr('x1',0).attr('y1',0).attr('x2',s).attr('y2',0)
+        .attr('stroke',color).attr('stroke-width',sw);
+    } else if(pat==='cruz'){
+      p.attr('patternTransform','rotate(45)');
+      p.append('line').attr('x1',0).attr('y1',0).attr('x2',s).attr('y2',0)
+        .attr('stroke',color).attr('stroke-width',sw);
+      p.append('line').attr('x1',0).attr('y1',0).attr('x2',0).attr('y2',s)
+        .attr('stroke',color).attr('stroke-width',sw);
+    } else if(pat==='puntos'){
+      p.append('circle').attr('cx',s/2).attr('cy',s/2).attr('r',sw*1.5).attr('fill',color);
+    }
+  }
+  return `url(#${key})`;
+}
+
+/* ---- Detección de contornos cerrados a partir de un punto interior ----
+   1. Construye el grafo de líneas (nodos = extremos coincidentes).
+   2. Traza todas las caras con la regla del "giro más cerrado" en cada nodo.
+   3. El punto designado se prueba contra cada cara (ray casting) y contra
+      círculos y rectángulos; gana el área más pequeña que lo contiene.     */
+function findLoops(){
+  const tol = 1e-3;
+  const lines = shapes.filter(s => s.type==='line' && layerOf(s).visible);
+  const nodes = [];
+  const nodeOf = (x,y)=>{
+    for(const n of nodes) if(Math.hypot(n.x-x, n.y-y) < tol) return n;
+    const n = {x, y, adj:[]}; nodes.push(n); return n;
+  };
+  for(const l of lines){
+    const a = nodeOf(l.x1,l.y1), b = nodeOf(l.x2,l.y2);
+    if(a===b) continue;
+    if(!a.adj.includes(b)) a.adj.push(b);
+    if(!b.adj.includes(a)) b.adj.push(a);
+  }
+  nodes.forEach((n,i)=> n.i = i);
+
+  const visited = new Set();
+  const loops = [];
+  for(const u0 of nodes) for(const v0 of u0.adj){
+    if(visited.has(u0.i+'>'+v0.i)) continue;
+    let u = u0, v = v0, closed = false;
+    const poly = [];
+    for(let g=0; g<2000; g++){
+      visited.add(u.i+'>'+v.i);
+      poly.push({x:v.x, y:v.y});
+      // siguiente arista: la de menor ángulo horario partiendo de la dirección v→u
+      const base = Math.atan2(u.y-v.y, u.x-v.x);
+      let best = null, bestA = Infinity;
+      for(const w of v.adj){
+        if(w===u && v.adj.length>1) continue;        // no regresar salvo callejón
+        let a = base - Math.atan2(w.y-v.y, w.x-v.x);
+        while(a <= 1e-12) a += 2*Math.PI;
+        while(a > 2*Math.PI) a -= 2*Math.PI;
+        if(a < bestA){ bestA = a; best = w; }
+      }
+      if(!best) break;
+      u = v; v = best;
+      if(u===u0 && v===v0){ closed = true; break; }   // cara completada
+      if(visited.has(u.i+'>'+v.i)) break;
+    }
+    if(closed && poly.length>=3) loops.push(poly);
+  }
+  return loops;
+}
+function polyArea(pts){
+  let a = 0;
+  for(let i=0; i<pts.length; i++){
+    const p = pts[i], q = pts[(i+1)%pts.length];
+    a += p.x*q.y - q.x*p.y;
+  }
+  return Math.abs(a)/2;
+}
+function pointInPoly(pt, pts){
+  let inside = false;
+  for(let i=0, j=pts.length-1; i<pts.length; j=i++){
+    const a = pts[i], b = pts[j];
+    if((a.y > pt.y) !== (b.y > pt.y) &&
+       pt.x < (b.x-a.x)*(pt.y-a.y)/(b.y-a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+function hatchAtPoint(pt){
+  const candidates = [];
+  for(const s of shapes){
+    if(!layerOf(s).visible) continue;
+    if(s.type==='circle' && Math.hypot(pt.x-s.cx, pt.y-s.cy) < s.r)
+      candidates.push({area: Math.PI*s.r*s.r, h:{kind:'circle', cx:s.cx, cy:s.cy, r:s.r}});
+    if(s.type==='rect' && pt.x>s.x && pt.x<s.x+s.w && pt.y>s.y && pt.y<s.y+s.h)
+      candidates.push({area: s.w*s.h, h:{kind:'rect', x:s.x, y:s.y, w:s.w, h:s.h}});
+  }
+  for(const poly of findLoops())
+    if(pointInPoly(pt, poly))
+      candidates.push({area: polyArea(poly), h:{kind:'poly', pts:poly}});
+
+  if(!candidates.length){
+    log('No se encontró un área cerrada en ese punto (los extremos de las líneas deben coincidir; dibuje con REFENT).', 'err');
+    return;
+  }
+  candidates.sort((a,b)=> a.area - b.area);   // el área más pequeña que contiene el punto
+  shapes.push({id:nextId++, type:'hatch', ...candidates[0].h,
+    pattern:hatchPattern, scale:hatchScale, layer:currentLayer});
+  log(`Sombreado ${HATCH_LABEL[hatchPattern]} aplicado (área ${fmt(candidates[0].area)}).`, 'ok');
+  render();
+}
+
+function hatchPrompt(){
+  setPrompt(`SOMBREA  Designe un punto interno del área a sombrear o [Patrón=${HATCH_LABEL[hatchPattern]} (P) · Escala=${hatchScale} (número)]:`);
+}
+function cycleHatchPattern(){
+  hatchPattern = HATCH_PATTERNS[(HATCH_PATTERNS.indexOf(hatchPattern)+1) % HATCH_PATTERNS.length];
+  log(`Patrón de sombreado: ${HATCH_LABEL[hatchPattern]}`);
+  if(tool==='hatch') hatchPrompt();
+}
+
+function buildHatch(sel, d){
+  sel.selectAll('*').remove();
+  const fill = ensurePattern(d.pattern, layerOf(d).color, d.scale || 1);
+  let el;
+  if(d.kind==='circle')
+    el = sel.append('circle').attr('cx',d.cx).attr('cy',d.cy).attr('r',d.r);
+  else if(d.kind==='rect')
+    el = sel.append('rect').attr('x',d.x).attr('y',d.y).attr('width',d.w).attr('height',d.h);
+  else
+    el = sel.append('path')
+      .attr('d', 'M ' + d.pts.map(p=>`${p.x} ${p.y}`).join(' L ') + ' Z');
+  el.attr('class','hatch-fill').attr('fill', fill);
+}
+
+
+/* ---------------- Recortar (TRIM) y Parte (BREAK) ----------------
+   TRIM: clic sobre el tramo sobrante; se elimina hasta las intersecciones
+   más cercanas con cualquier otra entidad visible (líneas, rectángulos,
+   círculos). PARTE: dos puntos sobre una línea; se elimina el tramo entre
+   ellos (o se divide en dos si los puntos coinciden).                     */
+let breakState = null;   // {line, t1} durante el comando PARTE
+
+const clamp01 = t => Math.max(0, Math.min(1, t));
+const lerpPt  = (d,t) => ({x: d.x1+(d.x2-d.x1)*t, y: d.y1+(d.y2-d.y1)*t});
+function projT(d, pt){           // parámetro t de la proyección de pt sobre la línea d
+  const dx=d.x2-d.x1, dy=d.y2-d.y1, L2=dx*dx+dy*dy;
+  return L2 < 1e-12 ? 0 : ((pt.x-d.x1)*dx + (pt.y-d.y1)*dy) / L2;
+}
+function segSegT(l, m){          // t sobre l de la intersección con el segmento m, o null
+  const den = (l.x2-l.x1)*(m.y2-m.y1) - (l.y2-l.y1)*(m.x2-m.x1);
+  if(Math.abs(den) < 1e-12) return null;
+  const t = ((m.x1-l.x1)*(m.y2-m.y1) - (m.y1-l.y1)*(m.x2-m.x1)) / den;
+  const u = ((m.x1-l.x1)*(l.y2-l.y1) - (m.y1-l.y1)*(l.x2-l.x1)) / den;
+  return (u >= -1e-9 && u <= 1+1e-9) ? t : null;
+}
+function lineCircleTs(l, c){     // parámetros t de intersección línea-círculo
+  const dx=l.x2-l.x1, dy=l.y2-l.y1;
+  const fx=l.x1-c.cx, fy=l.y1-c.cy;
+  const A=dx*dx+dy*dy, B=2*(fx*dx+fy*dy), C=fx*fx+fy*fy-c.r*c.r;
+  const D=B*B-4*A*C;
+  if(D < 0 || A < 1e-12) return [];
+  const s = Math.sqrt(D);
+  return [(-B-s)/(2*A), (-B+s)/(2*A)];
+}
+const rectEdges = r => [
+  {x1:r.x,     y1:r.y,     x2:r.x+r.w, y2:r.y},
+  {x1:r.x+r.w, y1:r.y,     x2:r.x+r.w, y2:r.y+r.h},
+  {x1:r.x+r.w, y1:r.y+r.h, x2:r.x,     y2:r.y+r.h},
+  {x1:r.x,     y1:r.y+r.h, x2:r.x,     y2:r.y},
+];
+function distToSeg(p, e){
+  const t = clamp01(projT(e, p));
+  const q = lerpPt(e, t);
+  return Math.hypot(p.x-q.x, p.y-q.y);
+}
+
+/* parámetros de corte sobre la línea d: intersecciones con todo lo visible */
+function cutParams(d){
+  const ts = [];
+  for(const s of shapes){
+    if(s === d || !layerOf(s).visible) continue;
+    if(s.type==='line'){ const t = segSegT(d, s); if(t!==null) ts.push(t); }
+    else if(s.type==='rect') for(const e of rectEdges(s)){ const t = segSegT(d, e); if(t!==null) ts.push(t); }
+    else if(s.type==='circle') for(const t of lineCircleTs(d, s)) ts.push(t);
+  }
+  return [...new Set(ts.filter(t => t>1e-6 && t<1-1e-6).map(t => Math.round(t*1e9)/1e9))]
+    .sort((a,b)=>a-b);
+}
+
+/* descompone un rectángulo en 4 líneas y devuelve la arista más cercana a pt */
+function explodeRect(r, pt){
+  const edges = rectEdges(r).map(e =>
+    ({id:nextId++, type:'line', ...e, layer:r.layer ?? 0}));
+  shapes = shapes.filter(s => s !== r);
+  shapes.push(...edges);
+  log('Rectángulo descompuesto en 4 líneas.');
+  return edges.reduce((a,b) => distToSeg(pt,a) <= distToSeg(pt,b) ? a : b);
+}
+
+function removeIfZero(d){
+  if(Math.hypot(d.x2-d.x1, d.y2-d.y1) < 1e-9) shapes = shapes.filter(s => s !== d);
+}
+
+function trimEntity(d, pt){
+  if(layerOf(d).locked){ log(`La capa "${layerOf(d).name}" está bloqueada.`, 'err'); return; }
+  if(d.type==='rect') d = explodeRect(d, pt);
+  if(d.type==='circle'){ log('Los círculos no se pueden recortar (MiniCAD no maneja arcos).', 'err'); return; }
+  if(d.type!=='line'){ log('Solo se pueden recortar líneas y rectángulos.', 'err'); return; }
+  const ts = cutParams(d);
+  if(!ts.length){ log('Ninguna arista de corte cruza ese objeto.', 'err'); render(); return; }
+  const t = clamp01(projT(d, pt));
+  const below = ts.filter(v => v < t), above = ts.filter(v => v > t);
+  const a = below.length ? Math.max(...below) : 0;
+  const b = above.length ? Math.min(...above) : 1;
+  if(!below.length){                       // recorta desde el inicio hasta b
+    const q = lerpPt(d, b); d.x1=q.x; d.y1=q.y;
+  } else if(!above.length){                // recorta desde a hasta el final
+    const q = lerpPt(d, a); d.x2=q.x; d.y2=q.y;
+  } else {                                 // tramo intermedio: divide en dos
+    const qa = lerpPt(d, a), qb = lerpPt(d, b);
+    shapes.push({id:nextId++, type:'line', x1:qb.x, y1:qb.y, x2:d.x2, y2:d.y2, layer:d.layer ?? 0});
+    d.x2 = qa.x; d.y2 = qa.y;
+  }
+  removeIfZero(d);
+  log('Tramo recortado.', 'ok');
+  render();
+}
+
+function breakFirst(d, pt){
+  if(layerOf(d).locked){ log(`La capa "${layerOf(d).name}" está bloqueada.`, 'err'); return; }
+  if(d.type==='rect') d = explodeRect(d, pt);
+  if(d.type!=='line'){ log('Solo se pueden partir líneas (los rectángulos se descomponen).', 'err'); render(); return; }
+  breakState = {line:d, t1: clamp01(projT(d, pt))};
+  render();
+  setPrompt('PARTE  Precise segundo punto de ruptura (el mismo punto solo divide la línea):');
+}
+function breakSecond(pt){
+  const d = breakState.line;
+  const t2 = clamp01(projT(d, pt));
+  let a = Math.min(breakState.t1, t2), b = Math.max(breakState.t1, t2);
+  breakState = null;
+  if(b - a < 1e-6){                        // dividir en un punto
+    if(a < 1e-6 || a > 1-1e-6){ log('El punto coincide con un extremo: nada que dividir.', 'err'); }
+    else{
+      const q = lerpPt(d, a);
+      shapes.push({id:nextId++, type:'line', x1:q.x, y1:q.y, x2:d.x2, y2:d.y2, layer:d.layer ?? 0});
+      d.x2 = q.x; d.y2 = q.y;
+      log('Línea dividida en dos en el punto designado.', 'ok');
+    }
+  } else if(a < 1e-6 && b > 1-1e-6){       // todo el tramo: se elimina la línea
+    shapes = shapes.filter(s => s !== d);
+    log('Línea eliminada por completo.', 'ok');
+  } else if(a < 1e-6){
+    const q = lerpPt(d, b); d.x1=q.x; d.y1=q.y;
+    log('Tramo eliminado.', 'ok');
+  } else if(b > 1-1e-6){
+    const q = lerpPt(d, a); d.x2=q.x; d.y2=q.y;
+    log('Tramo eliminado.', 'ok');
+  } else {
+    const qa = lerpPt(d, a), qb = lerpPt(d, b);
+    shapes.push({id:nextId++, type:'line', x1:qb.x, y1:qb.y, x2:d.x2, y2:d.y2, layer:d.layer ?? 0});
+    d.x2 = qa.x; d.y2 = qa.y;
+    log('Tramo eliminado entre los dos puntos.', 'ok');
+  }
+  removeIfZero(d);
+  render();
+  setPrompt(PROMPTS.break[0]);
+}
+
+/* ---------------- Cotas (acotación alineada) ----------------
+   d = {x1,y1,x2,y2, off}  off = distancia perpendicular firmada
+   Los tamaños (flechas, texto, separaciones) se mantienen constantes
+   en pantalla: se rebuilda en cada zoom con la escala actual.        */
+function buildDim(sel, d, preview=false){
+  sel.selectAll('*').remove();
+  const k = d3.zoomTransform(svgNode).k;
+  const w = v => v / k;                          // px de pantalla → unidades de mundo
+  const dx=d.x2-d.x1, dy=d.y2-d.y1, L=Math.hypot(dx,dy);
+  if(L < 1e-9) return;
+  const ux=dx/L, uy=dy/L, nx=-uy, ny=ux;
+  const off = d.off || 0, s = Math.sign(off) || 1;
+  const q1x=d.x1+nx*off, q1y=d.y1+ny*off;       // extremos de la línea de cota
+  const q2x=d.x2+nx*off, q2y=d.y2+ny*off;
+  const gap=w(4), ext=w(7), ah=w(12), aw=w(4), tg=w(7), fs=w(12.5);
+  const lineCls = preview ? 'preview' : 'shape-main dim-line';
+  const col = preview ? 'var(--preview)' : layerOf(d).color;
+  if(preview) sel.attr('class', (sel.attr('class')||'') + ' dim-prev');
+
+  // líneas de referencia (con separación del punto y rebase)
+  sel.append('line').attr('class',lineCls).attr('stroke',col)
+    .attr('x1', d.x1+nx*s*gap).attr('y1', d.y1+ny*s*gap)
+    .attr('x2', q1x+nx*s*ext).attr('y2', q1y+ny*s*ext);
+  sel.append('line').attr('class',lineCls).attr('stroke',col)
+    .attr('x1', d.x2+nx*s*gap).attr('y1', d.y2+ny*s*gap)
+    .attr('x2', q2x+nx*s*ext).attr('y2', q2y+ny*s*ext);
+  // línea de cota
+  sel.append('line').attr('class',lineCls).attr('stroke',col)
+    .attr('x1',q1x).attr('y1',q1y).attr('x2',q2x).attr('y2',q2y);
+  // flechas (apuntan hacia afuera, base hacia adentro)
+  const arrow = (axx,ayy,dirx,diry)=> sel.append('path').attr('class','dim-arrow')
+    .attr('fill',col)
+    .attr('d',`M ${axx} ${ayy}
+               L ${axx+dirx*ah+nx*aw} ${ayy+diry*ah+ny*aw}
+               L ${axx+dirx*ah-nx*aw} ${ayy+diry*ah-ny*aw} Z`);
+  arrow(q1x,q1y, ux, uy);
+  arrow(q2x,q2y,-ux,-uy);
+  // texto de la medida, sobre la línea, siempre legible
+  let ang = Math.atan2(dy,dx)*180/Math.PI;
+  while(ang >  90) ang -= 180;
+  while(ang <= -90) ang += 180;
+  const tx=(q1x+q2x)/2 + nx*s*tg, ty=(q1y+q2y)/2 + ny*s*tg;
+  sel.append('text').attr('class','dim-text')
+    .attr('font-size', fs).attr('fill', col)
+    .attr('transform', `translate(${tx},${ty}) rotate(${ang}) scale(1,-1)`)
+    .text(fmt(L));
+  // zona de selección invisible sobre la línea de cota
+  if(!preview)
+    sel.append('line').attr('class','shape-hit')
+      .attr('x1',q1x).attr('y1',q1y).attr('x2',q2x).attr('y2',q2y);
+}
+
+
+function renderPreview(){
+  gPreview.selectAll('*').remove();
+  if(!pending.length) return;
+  const p0 = pending[pending.length-1];
+  const m  = cursorPoint(p0);
+
+  if(tool==='line'){
+    gPreview.append('line').attr('class','preview')
+      .attr('x1',p0.x).attr('y1',p0.y).attr('x2',m.x).attr('y2',m.y);
+  }
+  if(tool==='circle'){
+    const r = dist(p0,m);
+    gPreview.append('circle').attr('class','preview')
+      .attr('cx',p0.x).attr('cy',p0.y).attr('r',Math.max(r,1e-9));
+    gPreview.append('line').attr('class','preview')
+      .attr('x1',p0.x).attr('y1',p0.y).attr('x2',m.x).attr('y2',m.y);
+  }
+  if(tool==='rect'){
+    gPreview.append('rect').attr('class','preview')
+      .attr('x',Math.min(p0.x,m.x)).attr('y',Math.min(p0.y,m.y))
+      .attr('width',Math.abs(m.x-p0.x)).attr('height',Math.abs(m.y-p0.y));
+  }
+  if(tool==='dim'){
+    if(pending.length===1){
+      gPreview.append('line').attr('class','preview')
+        .attr('x1',p0.x).attr('y1',p0.y).attr('x2',m.x).attr('y2',m.y);
+    } else if(pending.length>=2){
+      const [a,b] = pending;
+      const dxv=b.x-a.x, dyv=b.y-a.y, L=Math.hypot(dxv,dyv)||1e-9;
+      const nx=-dyv/L, ny=dxv/L;
+      const offv = (m.x-a.x)*nx + (m.y-a.y)*ny;
+      buildDim(gPreview.append('g'),
+        {x1:a.x, y1:a.y, x2:b.x, y2:b.y, off:offv}, true);
+    }
+  }
+}
+
+/* ---------------- Forzcursor y orto ---------------- */
+function currentSnap(p){
+  if(!snapOn) return p;
+  return { x: Math.round(p.x/minorStep)*minorStep,
+           y: Math.round(p.y/minorStep)*minorStep };
+}
+function applyOrtho(from, to){
+  if(!orthoOn || !from) return to;
+  return Math.abs(to.x-from.x) >= Math.abs(to.y-from.y)
+    ? {x:to.x, y:from.y} : {x:from.x, y:to.y};
+}
+
+/* ---------------- Referencia a entidades (OSNAP) ---------------- */
+function findOsnap(p){
+  if(!osnapOn || !shapes.length) return null;
+  const t   = d3.zoomTransform(svgNode);
+  const tol = 10 / t.k;                 // ~10 px de apertura en pantalla
+  let best = null, bestD = tol;
+  const prio = {fin:0, medio:1, centro:1, cuadrante:2};  // FIN gana en empates
+  const consider = (x,y,kind)=>{
+    const d = Math.hypot(p.x-x, p.y-y);
+    if(d < bestD - 1e-12 || (d <= bestD && best && prio[kind] < prio[best.kind])){
+      bestD = d; best = {x,y,kind};
+    }
+  };
+  for(const s of shapes){
+    if(!layerOf(s).visible) continue;
+    if(s.type==='line'){
+      consider(s.x1, s.y1, 'fin');
+      consider(s.x2, s.y2, 'fin');
+      consider((s.x1+s.x2)/2, (s.y1+s.y2)/2, 'medio');
+    }
+    if(s.type==='circle'){
+      consider(s.cx, s.cy, 'centro');
+      consider(s.cx+s.r, s.cy, 'cuadrante'); consider(s.cx-s.r, s.cy, 'cuadrante');
+      consider(s.cx, s.cy+s.r, 'cuadrante'); consider(s.cx, s.cy-s.r, 'cuadrante');
+    }
+    if(s.type==='rect'){
+      consider(s.x,     s.y,     'fin'); consider(s.x+s.w, s.y,     'fin');
+      consider(s.x,     s.y+s.h, 'fin'); consider(s.x+s.w, s.y+s.h, 'fin');
+      consider(s.x+s.w/2, s.y,     'medio'); consider(s.x+s.w/2, s.y+s.h, 'medio');
+      consider(s.x,     s.y+s.h/2, 'medio'); consider(s.x+s.w,   s.y+s.h/2, 'medio');
+    }
+  }
+  return best;
+}
+
+/* Punto efectivo del cursor: OSNAP tiene prioridad sobre rejilla y orto */
+function cursorPoint(from){
+  const hit = findOsnap(mouseW);
+  osnapHit = hit;
+  if(hit) return {x:hit.x, y:hit.y};
+  let p = currentSnap(mouseW);
+  if(from) p = applyOrtho(from, p);
+  return p;
+}
+
+/* ---------------- Máquina de estados de dibujo ---------------- */
+const PROMPTS = {
+  line:   ['LINEA  Precise primer punto:', 'LINEA  Precise punto siguiente o [Cerrar/C]:'],
+  circle: ['CIRCULO  Precise centro:', 'CIRCULO  Precise radio (número o punto):'],
+  rect:   ['RECTANG  Precise primera esquina:', 'RECTANG  Precise esquina opuesta:'],
+  dim:    ['COTA  Precise origen de la primera línea de referencia:',
+           'COTA  Precise origen de la segunda línea de referencia:',
+           'COTA  Precise ubicación de la línea de cota:'],
+  hatch:  ['SOMBREA  Designe un punto interno del área a sombrear o [Patrón (P) · Escala (número)]:'],
+  trim:   ['RECORTA  Designe el tramo del objeto que desea recortar:'],
+  break:  ['PARTE  Designe la línea en el primer punto de ruptura:'],
+};
+
+function startTool(name){
+  cancelOp(false);
+  tool = name;
+  document.querySelectorAll('.tbtn[data-tool]').forEach(b =>
+    b.classList.toggle('active', b.dataset.tool === name));
+  if(name === 'select'){ setPrompt('Comando:'); return; }
+  lastCmd = name;
+  if(name==='hatch'){ hatchPrompt(); return; }
+  setPrompt(PROMPTS[name][0]);
+}
+
+function addPoint(raw){
+  const p = {x:raw.x, y:raw.y};
+  if(tool==='line'){
+    if(!pending.length){ pending=[p]; }
+    else{
+      const a = pending[pending.length-1];
+      shapes.push({id:nextId++, type:'line', x1:a.x, y1:a.y, x2:p.x, y2:p.y, layer:currentLayer});
+      pending.push(p);
+      render();
+    }
+    setPrompt(PROMPTS.line[1]);
+  }
+  else if(tool==='circle'){
+    if(!pending.length){ pending=[p]; setPrompt(PROMPTS.circle[1]); }
+    else{
+      const c = pending[0];
+      commitCircle(c, dist(c,p));
+    }
+  }
+  else if(tool==='rect'){
+    if(!pending.length){ pending=[p]; setPrompt(PROMPTS.rect[1]); }
+    else{
+      const a = pending[0];
+      shapes.push({id:nextId++, type:'rect',
+        x:Math.min(a.x,p.x), y:Math.min(a.y,p.y),
+        w:Math.abs(p.x-a.x), h:Math.abs(p.y-a.y), layer:currentLayer});
+      log(`Rectángulo ${fmt(Math.abs(p.x-a.x))} × ${fmt(Math.abs(p.y-a.y))}`, 'ok');
+      render(); endOp();
+    }
+  }
+  else if(tool==='dim'){
+    if(pending.length===0){ pending=[p]; setPrompt(PROMPTS.dim[1]); }
+    else if(pending.length===1){
+      if(dist(pending[0],p) < 1e-9){ log('Los puntos coinciden.', 'err'); return; }
+      pending.push(p); setPrompt(PROMPTS.dim[2]);
+    }
+    else{
+      const [a,b] = pending;
+      const dxv=b.x-a.x, dyv=b.y-a.y, L=Math.hypot(dxv,dyv);
+      const nx=-dyv/L, ny=dxv/L;
+      let offv = (p.x-a.x)*nx + (p.y-a.y)*ny;
+      if(Math.abs(offv) < 1e-9) offv = 14 / d3.zoomTransform(svgNode).k;
+      shapes.push({id:nextId++, type:'dim', x1:a.x, y1:a.y, x2:b.x, y2:b.y, off:offv, layer:currentLayer});
+      log(`Cota = ${fmt(L)}`, 'ok');
+      render(); endOp();
+    }
+  }
+  lastPt = p;
+  renderPreview();
+}
+
+function commitCircle(c, r){
+  if(r <= 0){ log('Radio inválido.', 'err'); return; }
+  shapes.push({id:nextId++, type:'circle', cx:c.x, cy:c.y, r, layer:currentLayer});
+  log(`Círculo R=${fmt(r)} en ${fmt(c.x)},${fmt(c.y)}`, 'ok');
+  render(); endOp();
+}
+
+function endOp(){               // termina el comando, vuelve a esperar
+  pending = [];
+  gPreview.selectAll('*').remove();
+  setPrompt('Comando:');
+  if(tool!=='select') startToolKeep();
+}
+function startToolKeep(){       // mantiene la herramienta lista para repetir
+  setPrompt(PROMPTS[tool] ? PROMPTS[tool][0] : 'Comando:');
+}
+function finishLine(close=false){
+  if(tool==='line' && pending.length){
+    if(close && pending.length>2){
+      const a=pending[pending.length-1], b=pending[0];
+      shapes.push({id:nextId++, type:'line', x1:a.x, y1:a.y, x2:b.x, y2:b.y, layer:currentLayer});
+      render();
+    }
+    log(`Línea: ${pending.length-1 + (close&&pending.length>2?1:0)} segmento(s).`, 'ok');
+  }
+  endOp();
+}
+function cancelOp(msg=true){
+  if((pending.length || breakState) && msg) log('*Cancelado*');
+  pending = [];
+  breakState = null;
+  gPreview.selectAll('*').remove();
+  setPrompt(tool!=='select' && PROMPTS[tool] ? PROMPTS[tool][0] : 'Comando:');
+}
+
+/* ---------------- Análisis de entrada (estilo AutoCAD) ---------------- */
+function parsePoint(s){
+  // 10,20 (absoluta) · @5,5 (relativa) · @10<45 (polar relativa) · 10<45 (polar absoluta)
+  s = s.trim();
+  const rel = s.startsWith('@');
+  if(rel) s = s.slice(1);
+  let x, y;
+  if(s.includes('<')){
+    const [d,a] = s.split('<').map(Number);
+    if(isNaN(d)||isNaN(a)) return null;
+    const rad = a*Math.PI/180;
+    x = d*Math.cos(rad); y = d*Math.sin(rad);
+  } else if(s.includes(',')){
+    [x,y] = s.split(',').map(Number);
+    if(isNaN(x)||isNaN(y)) return null;
+  } else return null;
+  if(rel){
+    const base = pending.length ? pending[pending.length-1] : (lastPt || {x:0,y:0});
+    return {x:base.x+x, y:base.y+y};
+  }
+  return {x,y};
+}
+
+function handleNumber(n){
+  if(tool==='hatch'){
+    if(n<=0){ log('La escala debe ser mayor que 0.', 'err'); return true; }
+    hatchScale = n; log(`Escala de sombreado: ${n}`); hatchPrompt(); return true;
+  }
+  if(tool==='circle' && pending.length===1){ commitCircle(pending[0], n); return true; }
+  // entrada de distancia directa: hacia el cursor desde el último punto
+  if((tool==='line'||tool==='rect') && pending.length){
+    const a = pending[pending.length-1];
+    const m = cursorPoint(a);
+    const d = dist(a,m);
+    if(d < 1e-9) return false;
+    addPoint({x:a.x+(m.x-a.x)/d*n, y:a.y+(m.y-a.y)/d*n});
+    return true;
+  }
+  return false;
+}
+
+const COMMANDS = {
+  'l':'line','linea':'line','línea':'line','line':'line',
+  'c':'circle','circulo':'circle','círculo':'circle','circle':'circle',
+  'r':'rect','rec':'rect','rect':'rect','rectangulo':'rect','rectángulo':'rect','rectangle':'rect',
+  's':'select','sel':'select','seleccionar':'select',
+  'd':'dim','cota':'dim','dim':'dim','acota':'dim','acotar':'dim','dimension':'dim','dimensión':'dim',
+  'h':'hatch','sombrea':'hatch','sombreado':'hatch','hatch':'hatch','relleno':'hatch','rellenar':'hatch',
+  't':'trim','recorta':'trim','recortar':'trim','trim':'trim','tr':'trim',
+  'x':'break','parte':'break','partir':'break','corta':'break','cortar':'break','break':'break',
+};
+
+function runCommand(text){
+  const t = text.trim().toLowerCase();
+
+  if(t==='' ){
+    if(tool==='line' && pending.length){ finishLine(); return; }
+    if(lastCmd){ log(`Comando: ${lastCmd.toUpperCase()}`, 'echo'); startTool(lastCmd); }
+    return;
+  }
+  log(`Comando: ${text}`, 'echo');
+
+  // opciones del sombreado activo
+  if(tool==='hatch' && (t==='p'||t==='patron'||t==='patrón')){ cycleHatchPattern(); return; }
+
+  // ¿es coordenada?
+  const p = parsePoint(t);
+  if(p){
+    if(tool==='break'){
+      if(breakState) breakSecond(p);
+      else log('Primero designe la línea con un clic.', 'err');
+      return;
+    }
+    if(tool==='select'||tool==='hatch'||tool==='trim'){ log('No hay ningún comando de dibujo por puntos activo.', 'err'); return; }
+    addPoint(p);
+    return;
+  }
+  // ¿es número suelto?
+  const n = Number(t.replace(',','.'));
+  if(!isNaN(n) && t!==''){
+    if(!handleNumber(n)) log('Número no esperado en este contexto.', 'err');
+    return;
+  }
+  // cerrar polilínea
+  if((t==='c'||t==='cerrar') && tool==='line' && pending.length>2){ finishLine(true); return; }
+
+  // comandos de dibujo
+  if(COMMANDS[t]){ startTool(COMMANDS[t]); return; }
+
+  // NUEVACAPA [nombre]: crear capa desde la línea de comandos
+  if(t.startsWith('nuevacapa') || t.startsWith('newlayer')){
+    addLayer(text.trim().split(/\s+/).slice(1).join(' '));
+    return;
+  }
+
+  // comandos varios
+  switch(t){
+    case 'b': case 'borra': case 'borrar': case 'e': case 'erase': eraseSelected(); return;
+    case 'limpia': case 'limpiar': clearAll(); return;
+    case 'ze': case 'zoome': zoomExtents(); return;
+    case 'orto':   setOrtho(!orthoOn); return;
+    case 'forzc': case 'snap': setSnap(!snapOn); return;
+    case 'refent': case 'osnap': setOsnap(!osnapOn); return;
+    case 'capa': case 'capas': case 'la': case 'layer': toggleLayerPanel(); return;
+    case 'abrir': case 'dxf': case 'open': document.getElementById('dxfInput').click(); return;
+    case 'rejilla': case 'grid': setGrid(!gridOn); return;
+    case 'ayuda': case 'help': case '?':
+      log('Comandos: L línea · C círculo · R rectángulo · D cota · H sombrea · T recorta · X parte · S seleccionar · B borrar · LIMPIA · ZE zoom ext. · ORTO · FORZC · REFENT · REJILLA');
+      log('Selección por área (S): arrastre izq→der = VENTANA azul (solo lo totalmente dentro) · der→izq = CAPTURA verde (todo lo que toque el área). Lo capturado se suma a la selección; clic en vacío deselecciona.');
+      log('RECORTA (T): clic sobre el tramo sobrante; se elimina hasta las intersecciones con otras entidades. PARTE (X): clic en dos puntos de una línea para quitar el tramo entre ellos (mismo punto = solo dividir).');
+      log('SOMBREA (H): clic DENTRO del área cerrada (círculo, rectángulo o contorno de líneas); se rellena la región más pequeña que contenga el punto. P cambia el patrón (SÓLIDO/HORIZONTAL/ANSI31/CRUZ/PUNTOS), un número fija la escala.');
+      log('Capas: CAPA abre el administrador · NUEVACAPA [nombre] crea una capa · ⇪ mueve la selección a la capa actual.');
+      log('COTA (D): 2 puntos a medir + 1 clic para ubicar la línea de cota. Use REFENT para tomar los extremos exactos.');
+      log('REFENT (F3): el cursor salta a puntos finales ▢, medios △, centros ◯ y cuadrantes ◇ de las entidades.');
+      log('ABRIR / DXF (o el botón 📂 Abrir DXF, o arrastre el archivo al lienzo): importa un plano DXF de AutoCAD (LINE, CIRCLE, ARC, ELLIPSE, LWPOLYLINE, POLYLINE). Reemplaza el dibujo actual.');
+      log('Puntos: 10,20 abs · @5,5 rel · @10<45 polar · número = distancia/radio · Enter/clic der. termina · Esc cancela');
+      return;
+  }
+  log(`Comando desconocido: "${text}". Escriba AYUDA.`, 'err');
+}
+
+/* ---------------- Acciones ---------------- */
+function eraseSelected(){
+  const n = shapes.filter(s=>s.selected).length;
+  if(!n){ log('Nada seleccionado. Use el modo Seleccionar (S) y haga clic en entidades.', 'err'); return; }
+  shapes = shapes.filter(s=>!s.selected);
+  render();
+  log(`${n} entidad(es) borrada(s).`, 'ok');
+}
+function clearAll(){
+  if(!shapes.length) return;
+  shapes = []; render();
+  log('Dibujo limpiado.', 'ok');
+}
+function zoomExtents(){
+  if(!shapes.length){ initialView(); drawGrid(); return; }
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  for(const s of shapes){
+    if(!layerOf(s).visible) continue;
+    if(s.type==='line'){ x0=Math.min(x0,s.x1,s.x2); x1=Math.max(x1,s.x1,s.x2); y0=Math.min(y0,s.y1,s.y2); y1=Math.max(y1,s.y1,s.y2); }
+    if(s.type==='circle'){ x0=Math.min(x0,s.cx-s.r); x1=Math.max(x1,s.cx+s.r); y0=Math.min(y0,s.cy-s.r); y1=Math.max(y1,s.cy+s.r); }
+    if(s.type==='rect'){ x0=Math.min(x0,s.x); x1=Math.max(x1,s.x+s.w); y0=Math.min(y0,s.y); y1=Math.max(y1,s.y+s.h); }
+    if(s.type==='hatch'){
+      if(s.kind==='circle'){ x0=Math.min(x0,s.cx-s.r); x1=Math.max(x1,s.cx+s.r); y0=Math.min(y0,s.cy-s.r); y1=Math.max(y1,s.cy+s.r); }
+      if(s.kind==='rect'){ x0=Math.min(x0,s.x); x1=Math.max(x1,s.x+s.w); y0=Math.min(y0,s.y); y1=Math.max(y1,s.y+s.h); }
+      if(s.kind==='poly') for(const q of s.pts){ x0=Math.min(x0,q.x); x1=Math.max(x1,q.x); y0=Math.min(y0,q.y); y1=Math.max(y1,q.y); }
+    }
+    if(s.type==='dim'){
+      const dx=s.x2-s.x1, dy=s.y2-s.y1, L=Math.hypot(dx,dy)||1e-9;
+      const nx=-dy/L*s.off, ny=dx/L*s.off;
+      for(const [px_,py_] of [[s.x1,s.y1],[s.x2,s.y2],[s.x1+nx,s.y1+ny],[s.x2+nx,s.y2+ny]]){
+        x0=Math.min(x0,px_); x1=Math.max(x1,px_); y0=Math.min(y0,py_); y1=Math.max(y1,py_);
+      }
+    }
+  }
+  const [w,h]=viewSize(), pad=1.15;
+  const dx=Math.max(x1-x0,1e-6), dy=Math.max(y1-y0,1e-6);
+  const k = Math.min(w/(dx*pad), h/(dy*pad), 400);
+  const cx=(x0+x1)/2, cy=(y0+y1)/2;
+  const t = d3.zoomIdentity.translate(w/2 - cx*k, h/2 + cy*k).scale(k);
+  svg.transition().duration(350).call(zoom.transform, t);
+}
+
+/* ---------------- Administrador de capas ---------------- */
+const lpPanel = document.getElementById('layerPanel');
+
+function updateLayerChip(){
+  const ly = layerById(currentLayer);
+  document.getElementById('layerSwatch').style.background = ly.color;
+  document.getElementById('layerName').textContent = ly.name;
+}
+function toggleLayerPanel(show){
+  lpPanel.hidden = show===undefined ? !lpPanel.hidden : !show;
+  if(!lpPanel.hidden) renderLayers();
+}
+function lpButton(txt, title, onClick, cls=''){
+  const b = document.createElement('button');
+  b.className = 'lpbtn ' + cls; b.textContent = txt; b.title = title;
+  b.onclick = ev => { ev.stopPropagation(); onClick(); };
+  return b;
+}
+function renderLayers(){
+  const list = document.getElementById('lpList');
+  list.innerHTML = '';
+  for(const ly of layers){
+    const row = document.createElement('div');
+    row.className = 'lprow' + (ly.id===currentLayer ? ' current' : '');
+
+    row.appendChild(lpButton(ly.id===currentLayer ? '▶' : '·', 'Establecer como capa actual', ()=>{
+      currentLayer = ly.id; updateLayerChip(); renderLayers();
+      log(`Capa actual: ${ly.name}`);
+    }, ly.id===currentLayer ? 'on' : ''));
+
+    const col = document.createElement('input');
+    col.type = 'color'; col.value = ly.color; col.title = 'Color de capa';
+    col.oninput = e => { ly.color = e.target.value; render(); updateLayerChip(); };
+    row.appendChild(col);
+
+    const nm = document.createElement('input');
+    nm.type = 'text'; nm.value = ly.name; nm.className = 'lpname'; nm.title = 'Nombre de capa';
+    nm.onchange = e => { ly.name = e.target.value.trim() || ly.name; e.target.value = ly.name; updateLayerChip(); };
+    row.appendChild(nm);
+
+    row.appendChild(lpButton(ly.visible ? '👁' : '⊘', 'Activar/desactivar capa', ()=>{
+      ly.visible = !ly.visible;
+      if(!ly.visible) shapes.forEach(s => { if((s.layer??0)===ly.id) s.selected = false; });
+      render(); renderLayers();
+    }, ly.visible ? 'on' : ''));
+
+    row.appendChild(lpButton(ly.locked ? '🔒' : '🔓', 'Bloquear/desbloquear capa', ()=>{
+      ly.locked = !ly.locked;
+      if(ly.locked) shapes.forEach(s => { if((s.layer??0)===ly.id) s.selected = false; });
+      render(); renderLayers();
+    }, ly.locked ? 'on' : ''));
+
+    row.appendChild(lpButton('✕', 'Eliminar capa (sus entidades pasan a la capa 0)', ()=>{
+      if(ly.id===0){ log('La capa 0 no se puede eliminar.', 'err'); return; }
+      const moved = shapes.filter(s => (s.layer??0)===ly.id).length;
+      shapes.forEach(s => { if((s.layer??0)===ly.id) s.layer = 0; });
+      layers = layers.filter(l => l.id!==ly.id);
+      if(currentLayer===ly.id) currentLayer = 0;
+      updateLayerChip(); render(); renderLayers();
+      log(`Capa "${ly.name}" eliminada${moved ? ` (${moved} entidad(es) movida(s) a la capa 0)` : ''}.`, 'ok');
+    }, 'warn'));
+
+    list.appendChild(row);
+  }
+}
+function addLayer(name){
+  const ly = {
+    id: nextLayerId++,
+    name: name || `Capa ${nextLayerId-1}`,
+    color: LAYER_PALETTE[(nextLayerId-2) % LAYER_PALETTE.length],
+    visible: true, locked: false,
+  };
+  layers.push(ly);
+  currentLayer = ly.id;
+  updateLayerChip(); renderLayers();
+  log(`Capa "${ly.name}" creada y establecida como actual.`, 'ok');
+}
+function moveSelectionToCurrent(){
+  const sel = shapes.filter(s => s.selected);
+  if(!sel.length){ log('Nada seleccionado.', 'err'); return; }
+  sel.forEach(s => { s.layer = currentLayer; s.selected = false; });
+  render();
+  log(`${sel.length} entidad(es) movida(s) a la capa "${layerById(currentLayer).name}".`, 'ok');
+}
+
+function setSnap(v){ snapOn=v; document.getElementById('tgSnap').classList.toggle('on',v); log(`FORZC ${v?'activado':'desactivado'}.`); }
+function setOsnap(v){ osnapOn=v; if(!v) osnapHit=null; document.getElementById('tgOsnap').classList.toggle('on',v); log(`REFENT ${v?'activado':'desactivado'}.`); renderPreview(); }
+function setOrtho(v){ orthoOn=v; document.getElementById('tgOrtho').classList.toggle('on',v); log(`ORTO ${v?'activado':'desactivado'}.`); renderPreview(); }
+function setGrid(v){ gridOn=v; document.getElementById('tgGrid').classList.toggle('on',v); drawGrid(); }
+
+/* ---------------- Selección por ventana / captura ----------------
+   Arrastre izq→der: VENTANA (azul, solo entidades totalmente dentro).
+   Arrastre der→izq: CAPTURA (verde punteado, todo lo que toque el área). */
+let marquee = null;        // {sx, sy, mx, my} en coordenadas de pantalla
+let justMarqueed = false;  // suprime el clic que dispara el navegador tras soltar
+
+const inRect = (p,R) => p.x>=R.x0-1e-9 && p.x<=R.x1+1e-9 && p.y>=R.y0-1e-9 && p.y<=R.y1+1e-9;
+function segCrossesRect(seg, R){
+  if(inRect({x:seg.x1,y:seg.y1},R) || inRect({x:seg.x2,y:seg.y2},R)) return true;
+  for(const e of rectEdges({x:R.x0, y:R.y0, w:R.x1-R.x0, h:R.y1-R.y0})){
+    const t = segSegT(seg, e);
+    if(t!==null && t>=-1e-9 && t<=1+1e-9) return true;
+  }
+  return false;
+}
+function dimSegs(s){
+  const dx=s.x2-s.x1, dy=s.y2-s.y1, L=Math.hypot(dx,dy)||1e-9;
+  const nx=-dy/L*s.off, ny=dx/L*s.off;
+  const q1={x:s.x1+nx, y:s.y1+ny}, q2={x:s.x2+nx, y:s.y2+ny};
+  return [
+    {x1:s.x1,y1:s.y1,x2:q1.x,y2:q1.y},
+    {x1:s.x2,y1:s.y2,x2:q2.x,y2:q2.y},
+    {x1:q1.x,y1:q1.y,x2:q2.x,y2:q2.y},
+  ];
+}
+function entityInWindow(s, R){
+  if(s.type==='line')   return inRect({x:s.x1,y:s.y1},R) && inRect({x:s.x2,y:s.y2},R);
+  if(s.type==='circle') return s.cx-s.r>=R.x0 && s.cx+s.r<=R.x1 && s.cy-s.r>=R.y0 && s.cy+s.r<=R.y1;
+  if(s.type==='rect')   return s.x>=R.x0 && s.x+s.w<=R.x1 && s.y>=R.y0 && s.y+s.h<=R.y1;
+  if(s.type==='dim')    return dimSegs(s).every(g =>
+                          inRect({x:g.x1,y:g.y1},R) && inRect({x:g.x2,y:g.y2},R));
+  if(s.type==='hatch'){
+    if(s.kind==='circle') return s.cx-s.r>=R.x0 && s.cx+s.r<=R.x1 && s.cy-s.r>=R.y0 && s.cy+s.r<=R.y1;
+    if(s.kind==='rect')   return s.x>=R.x0 && s.x+s.w<=R.x1 && s.y>=R.y0 && s.y+s.h<=R.y1;
+    return s.pts.every(p => inRect(p,R));
+  }
+  return false;
+}
+function entityCrossing(s, R){
+  if(entityInWindow(s,R)) return true;
+  const corners = [{x:R.x0,y:R.y0},{x:R.x1,y:R.y0},{x:R.x1,y:R.y1},{x:R.x0,y:R.y1}];
+  if(s.type==='line') return segCrossesRect(s, R);
+  if(s.type==='circle'){
+    const cx=Math.max(R.x0,Math.min(s.cx,R.x1)), cy=Math.max(R.y0,Math.min(s.cy,R.y1));
+    const overlap = Math.hypot(cx-s.cx, cy-s.cy) <= s.r;
+    // si el área cae entera dentro del círculo sin tocar la circunferencia, no lo cruza
+    const dentroDelDisco = corners.every(c => Math.hypot(c.x-s.cx, c.y-s.cy) < s.r - 1e-9);
+    return overlap && !dentroDelDisco;
+  }
+  if(s.type==='rect') return rectEdges(s).some(e => segCrossesRect(e, R));
+  if(s.type==='dim')  return dimSegs(s).some(g => segCrossesRect(g, R));
+  if(s.type==='hatch'){
+    if(s.kind==='circle'){     // relleno: el interior cuenta
+      const cx=Math.max(R.x0,Math.min(s.cx,R.x1)), cy=Math.max(R.y0,Math.min(s.cy,R.y1));
+      return Math.hypot(cx-s.cx, cy-s.cy) <= s.r;
+    }
+    if(s.kind==='rect')
+      return !(R.x1<s.x || R.x0>s.x+s.w || R.y1<s.y || R.y0>s.y+s.h);
+    const center = {x:(R.x0+R.x1)/2, y:(R.y0+R.y1)/2};
+    return s.pts.some(p => inRect(p,R)) ||
+           s.pts.some((p,i)=>{
+             const q = s.pts[(i+1)%s.pts.length];
+             return segCrossesRect({x1:p.x,y1:p.y,x2:q.x,y2:q.y}, R);
+           }) ||
+           pointInPoly(center, s.pts);
+  }
+  return false;
+}
+function doMarqueeSelect(){
+  const a = screenToWorld(marquee.sx, marquee.sy);
+  const b = screenToWorld(marquee.mx, marquee.my);
+  const R = {x0:Math.min(a.x,b.x), x1:Math.max(a.x,b.x),
+             y0:Math.min(a.y,b.y), y1:Math.max(a.y,b.y)};
+  const crossing = marquee.mx < marquee.sx;     // der→izq = captura
+  let n = 0;
+  for(const s of shapes){
+    const ly = layerOf(s);
+    if(!ly.visible || ly.locked || s.selected) continue;
+    if(crossing ? entityCrossing(s,R) : entityInWindow(s,R)){ s.selected = true; n++; }
+  }
+  render();
+  const total = shapes.filter(s=>s.selected).length;
+  log(`${crossing?'Captura':'Ventana'}: ${n} entidad(es) añadida(s) · ${total} en la selección.`);
+}
+function drawMarquee(){
+  gMarquee.selectAll('*').remove();
+  if(!marquee || !marquee.active) return;
+  gMarquee.append('rect')
+    .attr('class', marquee.mx < marquee.sx ? 'marquee-crossing' : 'marquee-window')
+    .attr('x', Math.min(marquee.sx, marquee.mx))
+    .attr('y', Math.min(marquee.sy, marquee.my))
+    .attr('width',  Math.abs(marquee.mx - marquee.sx))
+    .attr('height', Math.abs(marquee.my - marquee.sy));
+}
+
+
+/* ---------------- Eventos de ratón ---------------- */
+svg.on('mousedown', ev => {
+  if(ev.button!==0 || tool!=='select') return;
+  const [mx,my] = d3.pointer(ev, svgNode);
+  marquee = {sx:mx, sy:my, mx, my, active:false};
+});
+
+svg.on('mousemove', ev => {
+  const [mx,my] = d3.pointer(ev, svgNode);
+  mouseW = screenToWorld(mx,my);
+  if(marquee){
+    marquee.mx = mx; marquee.my = my;
+    if(!marquee.active && Math.hypot(mx-marquee.sx, my-marquee.sy) > 4) marquee.active = true;
+    drawMarquee();
+  }
+  const eff = cursorPoint(pending.length ? pending[pending.length-1] : null);
+  document.getElementById('coords').textContent = `${fmt(eff.x)}, ${fmt(eff.y)}`;
+  drawCrosshair(mx,my);
+  renderPreview();
+});
+
+d3.select(window).on('mouseup.marquee', ev => {
+  if(!marquee) return;
+  if(marquee.active){ doMarqueeSelect(); justMarqueed = true; }
+  marquee = null;
+  gMarquee.selectAll('*').remove();
+});
+svg.on('mouseleave', ()=> drawCrosshair(null));
+
+svg.on('click', ev => {
+  if(ev.button!==0) return;
+  if(justMarqueed){ justMarqueed = false; return; }
+  cmdInput.focus();
+  if(tool==='select'){
+    // clic en vacío: deseleccionar (los clics sobre entidades hacen stopPropagation)
+    let any=false;
+    shapes.forEach(s=>{ if(s.selected){s.selected=false; any=true;} });
+    if(any) render();
+    return;
+  }
+  if(tool==='hatch'){
+    hatchAtPoint(mouseW);          // punto crudo: el snap podría sacarlo del área
+    return;
+  }
+  if(tool==='trim'){
+    log('Nada designado: haga clic sobre el tramo de la línea que desea recortar.', 'err');
+    return;
+  }
+  if(tool==='break'){
+    if(breakState) breakSecond(cursorPoint(null));
+    else log('Nada designado: haga clic sobre la línea en el primer punto de ruptura.', 'err');
+    return;
+  }
+  const p = cursorPoint(pending.length ? pending[pending.length-1] : null);
+  addPoint(p);
+});
+
+svg.on('contextmenu', ev => {       // clic derecho = Enter (terminar)
+  ev.preventDefault();
+  if(tool==='line' && pending.length) finishLine();
+  else cancelOp(false);
+});
+
+/* ---------------- Teclado ---------------- */
+cmdInput.addEventListener('keydown', ev => {
+  if(ev.key==='Enter'){ const v=cmdInput.value; cmdInput.value=''; runCommand(v); }
+  if(ev.key==='Escape'){ cmdInput.value=''; cancelOp(); }
+});
+document.addEventListener('keydown', ev => {
+  if(ev.target.tagName==='INPUT'){
+    // F-keys también funcionan dentro de cualquier input
+    if(ev.key==='F8'){ ev.preventDefault(); setOrtho(!orthoOn); }
+    if(ev.key==='F9'){ ev.preventDefault(); setSnap(!snapOn); }
+    if(ev.key==='F7'){ ev.preventDefault(); setGrid(!gridOn); }
+    if(ev.key==='F3'){ ev.preventDefault(); setOsnap(!osnapOn); }
+    return;
+  }
+  if(ev.key==='Escape'){ cancelOp(); return; }
+  if(ev.key==='Enter'){ runCommand(''); return; }
+  if(ev.key==='Delete' || ev.key==='Backspace'){ eraseSelected(); return; }
+  if(ev.key==='F8'){ ev.preventDefault(); setOrtho(!orthoOn); return; }
+  if(ev.key==='F9'){ ev.preventDefault(); setSnap(!snapOn); return; }
+  if(ev.key==='F7'){ ev.preventDefault(); setGrid(!gridOn); return; }
+  if(ev.key==='F3'){ ev.preventDefault(); setOsnap(!osnapOn); return; }
+  const k = ev.key.toLowerCase();
+  if(k==='l') startTool('line');
+  else if(k==='c'){ (tool==='line'&&pending.length>2) ? finishLine(true) : startTool('circle'); }
+  else if(k==='r') startTool('rect');
+  else if(k==='d') startTool('dim');
+  else if(k==='h') startTool('hatch');
+  else if(k==='t') startTool('trim');
+  else if(k==='x') startTool('break');
+  else if(k==='s') startTool('select');
+  else if(/^[0-9@.\-]$/.test(ev.key)){ cmdInput.focus(); } // empezar a escribir coordenadas
+});
+
+/* ---------------- Botones ---------------- */
+document.querySelectorAll('.tbtn[data-tool]').forEach(b =>
+  b.addEventListener('click', ()=> startTool(b.dataset.tool)));
+document.getElementById('btnErase').addEventListener('click', eraseSelected);
+document.getElementById('btnClear').addEventListener('click', clearAll);
+document.getElementById('btnExtents').addEventListener('click', zoomExtents);
+document.getElementById('tgSnap').addEventListener('click', ()=>setSnap(!snapOn));
+document.getElementById('tgOsnap').addEventListener('click', ()=>setOsnap(!osnapOn));
+document.getElementById('tgOrtho').addEventListener('click', ()=>setOrtho(!orthoOn));
+document.getElementById('tgGrid').addEventListener('click', ()=>setGrid(!gridOn));
+document.getElementById('btnLayers').addEventListener('click', ()=>toggleLayerPanel());
+document.getElementById('lpClose').addEventListener('click', ()=>toggleLayerPanel(false));
+document.getElementById('lpAdd').addEventListener('click', ()=>addLayer());
+document.getElementById('lpMove').addEventListener('click', moveSelectionToCurrent);
+
+/* ====================================================================
+   Lectura de archivos DXF (ASCII)
+   --------------------------------------------------------------------
+   DXF es un formato de pares (código de grupo / valor) en líneas
+   alternas. Se interpretan la tabla de CAPAS y las entidades de la
+   sección ENTITIES más habituales en planos de AutoCAD:
+     LINE · CIRCLE · ARC · ELLIPSE · LWPOLYLINE · POLYLINE (con bulges)
+   Los arcos, elipses y bulges se aproximan con segmentos de línea
+   (MiniCAD no maneja arcos como entidad propia). El sistema de
+   coordenadas de DXF ya tiene Y hacia arriba, igual que MiniCAD.
+   ==================================================================== */
+
+/* Índice de colores de AutoCAD (ACI) → hex, para los más comunes. */
+const ACI_COLORS = {
+  1:'#ff0000', 2:'#ffff00', 3:'#00ff00', 4:'#00ffff', 5:'#0000ff',
+  6:'#ff00ff', 7:'#e8eaed', 8:'#808080', 9:'#c0c0c0',
+  10:'#ff0000', 11:'#ff7f7f', 12:'#a60000', 13:'#a65353',
+  30:'#ff7f00', 40:'#ffbf00', 50:'#ffff00', 90:'#00ff00',
+  130:'#00ffff', 150:'#007fff', 170:'#0000ff', 210:'#7f00ff', 250:'#808080',
+  252:'#bfbfbf', 253:'#a6a6a6', 254:'#808080', 255:'#ffffff',
+};
+const aciToHex = i => ACI_COLORS[i] || null;
+
+/* Convierte el texto DXF en una lista ordenada de pares [código, valor]. */
+function parseDXFPairs(text){
+  const lines = text.split(/\r\n|\r|\n/);
+  const pairs = [];
+  for(let i=0; i+1 < lines.length; i += 2){
+    const code = parseInt(lines[i].trim(), 10);
+    if(Number.isNaN(code)) continue;
+    pairs.push([code, lines[i+1].trim()]);
+  }
+  return pairs;
+}
+
+/* Agrupa los pares en "objetos" delimitados por el código 0, anotando
+   en qué sección (ENTITIES, TABLES…) aparece cada uno. */
+function groupDXF(pairs){
+  const groups = [];
+  let cur = null, section = null, pendingSection = false;
+  for(const [code, val] of pairs){
+    if(code === 0){
+      if(cur) groups.push(cur);
+      cur = {type: val, tags: [], section};
+      pendingSection = (val === 'SECTION');
+      if(val === 'ENDSEC') section = null;
+    } else {
+      if(pendingSection && code === 2){ section = val; pendingSection = false; }
+      if(cur) cur.tags.push([code, val]);
+    }
+  }
+  if(cur) groups.push(cur);
+  return groups;
+}
+
+const dxfVal = (tags, code) => { for(const [c,v] of tags) if(c===code) return v; };
+const dxfNum = (tags, code, def=0) => { const v = dxfVal(tags, code); return v===undefined ? def : parseFloat(v); };
+
+/* Aproxima un arco (grados, sentido antihorario) con puntos. */
+function arcToPoints(cx, cy, r, aDeg0, aDeg1){
+  let a0 = aDeg0, a1 = aDeg1;
+  while(a1 <= a0) a1 += 360;
+  const sweep = (a1 - a0) * Math.PI/180;
+  const n = Math.max(2, Math.ceil(sweep / (Math.PI/36)));   // ~5° por segmento
+  const start = a0 * Math.PI/180, pts = [];
+  for(let i=0; i<=n; i++){
+    const a = start + sweep*i/n;
+    pts.push({x: cx + r*Math.cos(a), y: cy + r*Math.sin(a)});
+  }
+  return pts;
+}
+
+/* Aproxima el arco definido por un "bulge" entre dos vértices de polilínea. */
+function bulgeToPoints(p1, p2, bulge){
+  if(Math.abs(bulge) < 1e-9) return [p1, p2];
+  const inc = 4*Math.atan(bulge);                 // ángulo barrido (con signo)
+  const f = (1 - bulge*bulge) / (2*bulge);
+  const cx = 0.5*(p1.x+p2.x) - 0.5*(p2.y-p1.y)*f; // centro del arco
+  const cy = 0.5*(p1.y+p2.y) + 0.5*(p2.x-p1.x)*f;
+  const r  = Math.hypot(p1.x-cx, p1.y-cy);
+  const a0 = Math.atan2(p1.y-cy, p1.x-cx);
+  const n  = Math.max(2, Math.ceil(Math.abs(inc) / (Math.PI/36)));
+  const pts = [];
+  for(let i=0; i<=n; i++){
+    const a = a0 + inc*i/n;
+    pts.push({x: cx + r*Math.cos(a), y: cy + r*Math.sin(a)});
+  }
+  return pts;
+}
+
+/* Aproxima una elipse (parcial o completa) con puntos. */
+function ellipseToPoints(cx, cy, mex, mey, ratio, t0, t1){
+  const major = Math.hypot(mex, mey), minor = major*ratio;
+  const rot = Math.atan2(mey, mex);
+  let a0 = t0, a1 = t1;
+  if(a1 <= a0) a1 += 2*Math.PI;
+  const sweep = a1 - a0;
+  const n = Math.max(8, Math.ceil(sweep / (Math.PI/36)));
+  const cosR = Math.cos(rot), sinR = Math.sin(rot), pts = [];
+  for(let i=0; i<=n; i++){
+    const a = a0 + sweep*i/n;
+    const x = major*Math.cos(a), y = minor*Math.sin(a);
+    pts.push({x: cx + x*cosR - y*sinR, y: cy + x*sinR + y*cosR});
+  }
+  return pts;
+}
+
+/* Importa un dibujo DXF, reemplazando el contenido actual. */
+function importDXF(text, filename){
+  let pairs;
+  try { pairs = parseDXFPairs(text); }
+  catch(e){ log(`No se pudo interpretar el DXF: ${e.message}`, 'err'); return; }
+  const groups = groupDXF(pairs);
+
+  // --- Capas de la tabla LAYER (nombre → color en hex) ---
+  const dxfLayerColors = {};
+  for(const g of groups){
+    if(g.type==='LAYER' && g.section==='TABLES'){
+      const name = dxfVal(g.tags, 2);
+      if(name){ const hex = aciToHex(Math.abs(Math.round(dxfNum(g.tags, 62, 7)))); if(hex) dxfLayerColors[name] = hex; }
+    }
+  }
+
+  // Reinicia el dibujo, conservando las capas existentes (reutilizadas por nombre).
+  shapes = [];
+  const ensureLayer = name => {
+    name = name || '0';
+    let ly = layers.find(l => l.name === name);
+    if(ly){ if(dxfLayerColors[name]) ly.color = dxfLayerColors[name]; return ly.id; }
+    ly = { id: nextLayerId++, name,
+           color: dxfLayerColors[name] || LAYER_PALETTE[(nextLayerId-2) % LAYER_PALETTE.length],
+           visible:true, locked:false };
+    layers.push(ly);
+    return ly.id;
+  };
+
+  const counts = {}, skipped = {};
+  const bump = (o,k)=> o[k] = (o[k]||0)+1;
+  const addLine = (x1,y1,x2,y2,lay)=>{
+    if(Math.hypot(x2-x1, y2-y1) < 1e-9) return;
+    shapes.push({id:nextId++, type:'line', x1, y1, x2, y2, layer:lay});
+  };
+  const addPolyPts = (pts, lay)=>{ for(let i=0;i<pts.length-1;i++) addLine(pts[i].x,pts[i].y,pts[i+1].x,pts[i+1].y,lay); };
+
+  // --- Entidades ---
+  const ents = groups.filter(g => g.section==='ENTITIES');
+  for(let i=0; i<ents.length; i++){
+    const g = ents[i], t = g.tags;
+    const lay = ensureLayer(dxfVal(t, 8));
+    switch(g.type){
+      case 'LINE':
+        addLine(dxfNum(t,10), dxfNum(t,20), dxfNum(t,11), dxfNum(t,21), lay);
+        bump(counts,'líneas'); break;
+
+      case 'CIRCLE': {
+        const r = dxfNum(t,40);
+        if(r > 0){ shapes.push({id:nextId++, type:'circle', cx:dxfNum(t,10), cy:dxfNum(t,20), r, layer:lay}); bump(counts,'círculos'); }
+        break;
+      }
+      case 'ARC':
+        addPolyPts(arcToPoints(dxfNum(t,10), dxfNum(t,20), dxfNum(t,40), dxfNum(t,50), dxfNum(t,51)), lay);
+        bump(counts,'arcos'); break;
+
+      case 'ELLIPSE':
+        addPolyPts(ellipseToPoints(dxfNum(t,10), dxfNum(t,20), dxfNum(t,11), dxfNum(t,21),
+                                   dxfNum(t,40,1), dxfNum(t,41,0), dxfNum(t,42, 2*Math.PI)), lay);
+        bump(counts,'elipses'); break;
+
+      case 'LWPOLYLINE': {
+        const verts = []; let v = null;
+        for(const [c,val] of t){
+          if(c===10){ if(v) verts.push(v); v = {x:parseFloat(val), y:0, bulge:0}; }
+          else if(c===20 && v){ v.y = parseFloat(val); }
+          else if(c===42 && v){ v.bulge = parseFloat(val); }
+        }
+        if(v) verts.push(v);
+        const closed = (dxfNum(t,70,0) & 1) === 1;
+        const segEnds = closed ? verts.length : verts.length-1;
+        for(let k=0; k<segEnds; k++){
+          const a = verts[k], b = verts[(k+1)%verts.length];
+          if(Math.abs(a.bulge) > 1e-9) addPolyPts(bulgeToPoints(a, b, a.bulge), lay);
+          else addLine(a.x, a.y, b.x, b.y, lay);
+        }
+        bump(counts,'polilíneas'); break;
+      }
+
+      case 'POLYLINE': {                 // formato antiguo: VERTEX… hasta SEQEND
+        const closed = (dxfNum(t,70,0) & 1) === 1;
+        const verts = [];
+        let j = i+1;
+        for(; j<ents.length && ents[j].type==='VERTEX'; j++){
+          verts.push({x:dxfNum(ents[j].tags,10), y:dxfNum(ents[j].tags,20), bulge:dxfNum(ents[j].tags,42,0)});
+        }
+        if(j<ents.length && ents[j].type==='SEQEND') j++;
+        i = j-1;                          // saltar los VERTEX/SEQEND consumidos
+        const segEnds = closed ? verts.length : verts.length-1;
+        for(let k=0; k<segEnds && verts.length>1; k++){
+          const a = verts[k], b = verts[(k+1)%verts.length];
+          if(Math.abs(a.bulge) > 1e-9) addPolyPts(bulgeToPoints(a, b, a.bulge), lay);
+          else addLine(a.x, a.y, b.x, b.y, lay);
+        }
+        bump(counts,'polilíneas'); break;
+      }
+
+      case 'VERTEX': case 'SEQEND': case 'ENDSEC': break;   // estructurales / ya consumidos
+      default: bump(skipped, g.type);
+    }
+  }
+
+  shapes.forEach(s => s.selected = false);
+  updateLayerChip();
+  if(!lpPanel.hidden) renderLayers();
+  render();
+  zoomExtents();
+
+  const resumen = Object.entries(counts).map(([k,n]) => `${n} ${k}`).join(', ');
+  log(`DXF "${filename}" importado: ${resumen || 'sin entidades reconocidas'}.`, 'ok');
+  const omit = Object.entries(skipped).map(([k,n]) => `${k}×${n}`).join(', ');
+  if(omit) log(`Entidades no soportadas omitidas: ${omit}.`);
+}
+
+/* Botón e input de archivo + arrastrar y soltar sobre el lienzo */
+const dxfInput = document.getElementById('dxfInput');
+function loadDXFFile(file){
+  if(!file) return;
+  if(!/\.dxf$/i.test(file.name)) log(`"${file.name}" no parece un DXF; se intentará leer de todos modos.`, 'err');
+  const reader = new FileReader();
+  reader.onload  = e => importDXF(e.target.result, file.name);
+  reader.onerror = () => log('No se pudo leer el archivo.', 'err');
+  reader.readAsText(file);
+}
+document.getElementById('btnOpenDxf').addEventListener('click', ()=> dxfInput.click());
+dxfInput.addEventListener('change', ev => { loadDXFFile(ev.target.files[0]); ev.target.value=''; });
+
+const viewportEl = document.getElementById('viewport');
+viewportEl.addEventListener('dragover', ev => { ev.preventDefault(); });
+viewportEl.addEventListener('drop', ev => {
+  ev.preventDefault();
+  if(ev.dataTransfer.files && ev.dataTransfer.files.length) loadDXFFile(ev.dataTransfer.files[0]);
+});
+
+/* ---------------- Arranque ---------------- */
+window.addEventListener('resize', ()=>{ drawGrid(); });
+initialView();
+drawGrid();
+startTool('select');
+updateLayerChip();
+log('MiniCAD listo. Escriba AYUDA para ver los comandos.', 'ok');
+log('Ejemplo: L ⏎  0,0 ⏎  @50,0 ⏎  @50<90 ⏎  C (cerrar)');
+cmdInput.focus();
+</script>
+</body>
+</html>

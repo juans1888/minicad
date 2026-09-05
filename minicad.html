@@ -116,6 +116,13 @@
     border-bottom:1px solid #343c45; flex:none;}
   #aiClose{cursor:pointer; color:var(--muted); font-size:13px;}
   #aiClose:hover{color:#fff;}
+  #aiProviderBar{display:flex; align-items:center; gap:6px; padding:8px 10px; border-bottom:1px solid #343c45;
+    flex:none; font-family:var(--mono); font-size:10.5px; color:var(--muted);}
+  #aiProviderBar select{flex:1; min-width:0; background:#1a2026; border:1px solid #343c45; color:var(--text);
+    font-family:var(--mono); font-size:11px; padding:3px 6px; border-radius:3px;}
+  #aiProviderBar select:focus{outline:none; border-color:var(--accent);}
+  #aiWarning{padding:6px 10px; font-size:10.5px; line-height:1.4; color:var(--sel);
+    background:rgba(255,176,31,.08); border-bottom:1px solid #343c45; flex:none;}
   #aiKeyBar{display:flex; gap:6px; padding:8px 10px; border-bottom:1px solid #343c45; flex:none;}
   #aiKeyBar input{flex:1; min-width:0; background:#1a2026; border:1px solid #343c45; color:var(--text);
     font-family:var(--mono); font-size:11.5px; padding:4px 6px; border-radius:3px;}
@@ -203,13 +210,21 @@
     <svg id="canvas"></svg>
     <div id="aiPanel" hidden>
       <div id="aiHead">ASISTENTE IA <span id="aiClose" title="Cerrar">✕</span></div>
+      <div id="aiProviderBar">Proveedor
+        <select id="aiProviderSelect" title="Qué API usar para el asistente">
+          <option value="anthropic">Anthropic (Claude)</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="nvidia">NVIDIA (NIM)</option>
+        </select>
+      </div>
       <div id="aiKeyBar">
-        <input id="aiKeyInput" type="password" placeholder="API key de Anthropic (sk-ant-…)" autocomplete="off" spellcheck="false">
+        <input id="aiKeyInput" type="password" autocomplete="off" spellcheck="false">
         <button class="tbtn" id="aiKeySave" title="Guardar la key en este navegador">Guardar</button>
         <button class="tbtn" id="aiKeyClear" title="Borrar la key guardada">✕</button>
       </div>
-      <div id="aiKeyHint">La key se guarda solo en este navegador (localStorage) y se usa para llamar directo a la API de Anthropic desde acá. Nunca se envía a otro servidor.</div>
-      <div id="aiModelBar">Modelo <input id="aiModelInput" value="claude-opus-5" spellcheck="false" title="ID del modelo de Claude a usar"></div>
+      <div id="aiKeyHint">La key se guarda solo en este navegador (localStorage), separada por proveedor, y se usa para llamar directo a su API desde acá. Nunca se envía a otro servidor.</div>
+      <div id="aiWarning" hidden></div>
+      <div id="aiModelBar">Modelo <input id="aiModelInput" spellcheck="false" title="ID del modelo a usar"></div>
       <div id="aiMsgs"></div>
       <div id="aiInputBar">
         <textarea id="aiInput" rows="2" placeholder="Pedile algo a la IA, ej: 'dibujá un rectángulo de 40x20 en 0,0'" spellcheck="false"></textarea>
@@ -1771,30 +1786,29 @@ viewportEl.addEventListener('drop', ev => {
    línea de comandos. run_raw_command es la única tool de escape: reusa
    el intérprete de texto existente (runCommand) para todo lo que no
    tiene tool dedicada (recortar, partir, sombrear, ajustes, zoom, DXF…).
-   La API key vive solo en este navegador (localStorage); las llamadas
-   van directo del navegador a Anthropic — no hay backend propio.
+   Hay tres proveedores posibles (Anthropic, OpenRouter, NVIDIA NIM), cada
+   uno con su propia API key (por navegador/localStorage) y su propio
+   formato de mensajes — no hay backend propio, las llamadas salen
+   directo del navegador a la API del proveedor elegido.
    ==================================================================== */
 
-const AI_KEY_STORAGE     = 'minicad.anthropicApiKey';
-const AI_MODEL_STORAGE   = 'minicad.anthropicModel';
-const AI_DEFAULT_MODEL   = 'claude-opus-5';
+const AI_ACTIVE_PROVIDER_STORAGE = 'minicad.aiProvider';
 const AI_FALLBACK_MODELS = ['claude-opus-5','claude-fable-5-1','claude-fable-5','claude-mythos-5-1','claude-mythos-5'];
 const AI_MAX_TOOL_TURNS  = 8;    // corta un loop de tools que no converge
 
-let aiMessages = [];   // historial de la conversación (formato Messages API)
+let aiMessages = [];   // historial de la conversación activa, en el formato nativo del proveedor elegido
 let aiBusy     = false;
 let aiSnapshot = null;  // {shapes, layers, currentLayer, nextId, nextLayerId} previo al último pedido
 
-const aiPanel      = document.getElementById('aiPanel');
-const aiKeyInput    = document.getElementById('aiKeyInput');
-const aiModelInput  = document.getElementById('aiModelInput');
-const aiMsgsEl      = document.getElementById('aiMsgs');
-const aiInputEl     = document.getElementById('aiInput');
-const aiSendBtn     = document.getElementById('aiSend');
-const aiUndoBtn     = document.getElementById('aiUndoBtn');
-
-const aiGetKey   = () => localStorage.getItem(AI_KEY_STORAGE) || '';
-const aiGetModel = () => localStorage.getItem(AI_MODEL_STORAGE) || AI_DEFAULT_MODEL;
+const aiPanel          = document.getElementById('aiPanel');
+const aiProviderSelect  = document.getElementById('aiProviderSelect');
+const aiWarningEl       = document.getElementById('aiWarning');
+const aiKeyInput        = document.getElementById('aiKeyInput');
+const aiModelInput      = document.getElementById('aiModelInput');
+const aiMsgsEl          = document.getElementById('aiMsgs');
+const aiInputEl         = document.getElementById('aiInput');
+const aiSendBtn         = document.getElementById('aiSend');
+const aiUndoBtn         = document.getElementById('aiUndoBtn');
 
 const AI_SYSTEM_PROMPT = `Sos el asistente de MiniCAD, un programa mínimo de dibujo paramétrico 2D en el navegador (estilo AutoCAD: ejes con Y hacia arriba, unidades sin nombre).
 
@@ -1991,11 +2005,28 @@ function aiExecuteTool(name, input){
   catch(e){ aiLog(`error en ${name} — ${e.message}`, 'err'); return {isError:true, content: e.message || String(e)}; }
 }
 
-/* ---- Cliente HTTP directo a Anthropic (sin backend propio, BYOK) ---- */
+/* ---- Fetch genérico: timeout + mensajes de error legibles, comunes a los 3 proveedores ---- */
+async function aiFetchJSON(url, headers, body, label, corsRisk){
+  const controller = new AbortController();
+  const timeoutId = setTimeout(()=>controller.abort(), 60000);
+  let res;
+  try{
+    res = await fetch(url, {method:'POST', headers, body:JSON.stringify(body), signal:controller.signal});
+  }catch(e){
+    const corsHint = corsRisk ? ' Puede que esta API no permita llamadas directas desde el navegador (CORS); haría falta un proxy propio.' : '';
+    throw new Error(e.name==='AbortError' ? `Se agotó el tiempo de espera contactando a ${label} (60 s).`
+                                           : `No se pudo contactar a ${label}: ${e.message}.${corsHint}`);
+  }finally{ clearTimeout(timeoutId); }
+  const data = await res.json().catch(()=>null);
+  if(!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status} de ${label}`);
+  return data;
+}
+
+/* ---- Anthropic: Messages API nativa (sin backend propio, BYOK) ---- */
 async function aiCallAnthropic(){
   const key = aiGetKey();
   if(!key) throw new Error('Falta la API key de Anthropic. Pegala arriba y tocá Guardar.');
-  const model = (aiModelInput.value || '').trim() || AI_DEFAULT_MODEL;
+  const model = (aiModelInput.value || '').trim() || AI_PROVIDERS.anthropic.defaultModel;
   const body = {
     model, max_tokens:4096,
     system:[{type:'text', text:AI_SYSTEM_PROMPT, cache_control:{type:'ephemeral'}}],
@@ -2009,20 +2040,97 @@ async function aiCallAnthropic(){
     body.fallbacks = 'default';
     headers['anthropic-beta'] = 'server-side-fallback-2026-07-01';
   }
-  const controller = new AbortController();
-  const timeoutId = setTimeout(()=>controller.abort(), 60000);
-  let res;
-  try{
-    res = await fetch('https://api.anthropic.com/v1/messages',
-      {method:'POST', headers, body:JSON.stringify(body), signal:controller.signal});
-  }catch(e){
-    throw new Error(e.name==='AbortError' ? 'Se agotó el tiempo de espera contactando a Claude (60 s).'
-                                           : `No se pudo contactar a Claude: ${e.message}`);
-  }finally{ clearTimeout(timeoutId); }
-  const data = await res.json().catch(()=>null);
-  if(!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
-  return data;
+  return aiFetchJSON('https://api.anthropic.com/v1/messages', headers, body, 'Claude', false);
 }
+function aiParseAnthropic(json){
+  const blocks = (json.content || [])
+    .filter(b => b.type==='text' || b.type==='tool_use')
+    .map(b => b.type==='text' ? {type:'text', text:b.text} : {type:'tool_use', id:b.id, name:b.name, input:b.input});
+  const stopReason = json.stop_reason==='tool_use' ? 'tool_use' : json.stop_reason==='refusal' ? 'refusal' : 'end';
+  return {blocks, stopReason, refusalCategory: json.stop_details?.category};
+}
+const aiAppendAssistantAnthropic = json => aiMessages.push({role:'assistant', content:json.content});
+const aiAppendToolResultsAnthropic = results => aiMessages.push({role:'user', content:
+  results.map(r => ({type:'tool_result', tool_use_id:r.id, content:r.result.content, is_error:r.result.isError}))});
+
+/* ---- OpenRouter / NVIDIA NIM: ambas hablan la misma API estilo "chat completions" ---- */
+const aiToolsAsOpenAIFunctions = () =>
+  AI_TOOLS.map(t => ({type:'function', function:{name:t.name, description:t.description, parameters:t.input_schema}}));
+
+async function aiCallOpenAICompatible(providerId){
+  const cfg = AI_PROVIDERS[providerId];
+  const key = aiGetKey();
+  if(!key) throw new Error(`Falta la API key de ${cfg.label}. Pegala arriba y tocá Guardar.`);
+  const model = (aiModelInput.value || '').trim();
+  if(!model) throw new Error(`Falta indicar un modelo de ${cfg.label} en el campo "Modelo".`);
+  const body = {
+    model, max_tokens:4096, tool_choice:'auto',
+    messages: [{role:'system', content:AI_SYSTEM_PROMPT}, ...aiMessages],
+    tools: aiToolsAsOpenAIFunctions(),
+  };
+  const headers = {'content-type':'application/json', 'authorization':`Bearer ${key}`, ...cfg.extraHeaders};
+  return aiFetchJSON(cfg.url, headers, body, cfg.label, !!cfg.corsRisk);
+}
+function aiParseOpenAI(json){
+  const choice = json.choices?.[0] || {};
+  const msg = choice.message || {};
+  const blocks = [];
+  if(msg.content) blocks.push({type:'text', text:msg.content});
+  for(const tc of (msg.tool_calls || [])){
+    let input = {};
+    try{ input = JSON.parse(tc.function.arguments || '{}'); }
+    catch(e){ /* input queda vacío: la tool propia fallará su validación con un error legible */ }
+    blocks.push({type:'tool_use', id:tc.id, name:tc.function.name, input});
+  }
+  const stopReason = choice.finish_reason==='tool_calls' ? 'tool_use'
+    : choice.finish_reason==='content_filter' ? 'refusal' : 'end';
+  return {blocks, stopReason};
+}
+const aiAppendAssistantOpenAI = json => { const m = json.choices?.[0]?.message; if(m) aiMessages.push(m); };
+const aiAppendToolResultsOpenAI = results => results.forEach(r =>
+  aiMessages.push({role:'tool', tool_call_id:r.id, content:(r.result.isError?'ERROR: ':'')+r.result.content}));
+
+/* Cada proveedor guarda su key/modelo por separado y sabe traducir el catálogo
+   AI_TOOLS/AI_SYSTEM_PROMPT (arriba, son los mismos para los tres) hacia y desde
+   su propio formato de mensajes. Los que hablan la API estilo OpenAI (OpenRouter,
+   NVIDIA) comparten las mismas funciones de llamada/parseo. */
+const AI_PROVIDERS = {
+  anthropic: {
+    id:'anthropic', label:'Anthropic (Claude)',
+    keyStorage:'minicad.anthropicApiKey', modelStorage:'minicad.anthropicModel',
+    defaultModel:'claude-opus-5', keyPlaceholder:'sk-ant-…', modelPlaceholder:'claude-opus-5',
+    warning:'',
+    call: () => aiCallAnthropic(),
+    parse: aiParseAnthropic, appendAssistantTurn: aiAppendAssistantAnthropic, appendToolResults: aiAppendToolResultsAnthropic,
+  },
+  openrouter: {
+    id:'openrouter', label:'OpenRouter',
+    keyStorage:'minicad.openrouterApiKey', modelStorage:'minicad.openrouterModel',
+    defaultModel:'', keyPlaceholder:'sk-or-v1-…', modelPlaceholder:'proveedor/modelo, ej: anthropic/claude-sonnet-5',
+    url:'https://openrouter.ai/api/v1/chat/completions',
+    extraHeaders:{'HTTP-Referer':'https://github.com/juans1888/minicad', 'X-Title':'MiniCAD'},
+    warning:'',
+    call: () => aiCallOpenAICompatible('openrouter'),
+    parse: aiParseOpenAI, appendAssistantTurn: aiAppendAssistantOpenAI, appendToolResults: aiAppendToolResultsOpenAI,
+  },
+  nvidia: {
+    id:'nvidia', label:'NVIDIA (NIM)',
+    keyStorage:'minicad.nvidiaApiKey', modelStorage:'minicad.nvidiaModel',
+    defaultModel:'', keyPlaceholder:'nvapi-…', modelPlaceholder:'proveedor/modelo, ej: meta/llama-3.1-70b-instruct',
+    url:'https://integrate.api.nvidia.com/v1/chat/completions',
+    extraHeaders:{}, corsRisk:true,
+    warning:'⚠ La API de NVIDIA no documenta soporte CORS: es posible que estas llamadas directas desde el navegador fallen (haría falta un proxy propio). Además, no todos los modelos de su catálogo soportan tool calling.',
+    call: () => aiCallOpenAICompatible('nvidia'),
+    parse: aiParseOpenAI, appendAssistantTurn: aiAppendAssistantOpenAI, appendToolResults: aiAppendToolResultsOpenAI,
+  },
+};
+function aiGetActiveProviderId(){
+  const v = localStorage.getItem(AI_ACTIVE_PROVIDER_STORAGE);
+  return AI_PROVIDERS[v] ? v : 'anthropic';
+}
+const aiActiveProvider = () => AI_PROVIDERS[aiGetActiveProviderId()];
+const aiGetKey   = () => localStorage.getItem(aiActiveProvider().keyStorage) || '';
+const aiGetModel = () => localStorage.getItem(aiActiveProvider().modelStorage) || aiActiveProvider().defaultModel || '';
 
 /* ---- Chat: render + loop de tool use ---- */
 function aiRenderMsg(cls, text){
@@ -2038,27 +2146,29 @@ function aiSetBusy(v){
   aiSendBtn.disabled = v;
 }
 async function aiRunToolLoop(){
+  const provider = aiActiveProvider();
   for(let turn=0; turn<AI_MAX_TOOL_TURNS; turn++){
-    const data = await aiCallAnthropic();
-    aiMessages.push({role:'assistant', content:data.content});
+    const data = await provider.call();
+    provider.appendAssistantTurn(data);
+    const parsed = provider.parse(data);
 
-    if(data.stop_reason === 'refusal'){
-      const why = data.stop_details?.category ? ` (motivo: ${data.stop_details.category})` : '';
-      aiRenderMsg('error', `Claude no pudo continuar con ese pedido${why}.`);
+    if(parsed.stopReason === 'refusal'){
+      const why = parsed.refusalCategory ? ` (motivo: ${parsed.refusalCategory})` : '';
+      aiRenderMsg('error', `${provider.label} no pudo continuar con ese pedido${why}.`);
       return;
     }
-    const text = data.content.filter(b=>b.type==='text').map(b=>b.text).join('\n').trim();
+    const text = parsed.blocks.filter(b=>b.type==='text').map(b=>b.text).join('\n').trim();
     if(text) aiRenderMsg('assistant', text);
 
-    const toolUses = data.content.filter(b => b.type==='tool_use');
-    if(!toolUses.length || data.stop_reason !== 'tool_use') return;
+    const toolUses = parsed.blocks.filter(b => b.type==='tool_use');
+    if(!toolUses.length || parsed.stopReason !== 'tool_use') return;
 
     const toolResults = toolUses.map(tu => {
       aiRenderMsg('tool', `→ ${tu.name}(${JSON.stringify(tu.input)})`);
       const r = aiExecuteTool(tu.name, tu.input);
-      return {type:'tool_result', tool_use_id:tu.id, content:r.content, is_error:r.isError};
+      return {id:tu.id, name:tu.name, input:tu.input, result:r};
     });
-    aiMessages.push({role:'user', content:toolResults});
+    provider.appendToolResults(toolResults);
   }
   aiRenderMsg('error', 'Se alcanzó el límite de pasos por pedido; contame si necesitás que siga.');
 }
@@ -2077,35 +2187,55 @@ async function aiHandleSend(){
 }
 
 /* ---- Wiring de la UI del panel ---- */
+function aiRefreshProviderUI(){
+  const p = aiActiveProvider();
+  aiProviderSelect.value = p.id;
+  aiKeyInput.value = aiGetKey();
+  aiKeyInput.placeholder = p.keyPlaceholder;
+  aiModelInput.value = aiGetModel();
+  aiModelInput.placeholder = p.modelPlaceholder;
+  aiWarningEl.textContent = p.warning || '';
+  aiWarningEl.hidden = !p.warning;
+}
+
 document.getElementById('btnAI').addEventListener('click', ()=>{
   aiPanel.hidden = !aiPanel.hidden;
   if(!aiPanel.hidden && !aiMsgsEl.children.length)
-    aiRenderMsg('assistant', 'Hola, soy el asistente de MiniCAD. Pegá tu API key de Anthropic arriba para empezar, y después pedime lo que quieras dibujar.');
+    aiRenderMsg('assistant', `Hola, soy el asistente de MiniCAD. Elegí un proveedor y pegá tu API key arriba para empezar, y después pedime lo que quieras dibujar.`);
 });
 document.getElementById('aiClose').addEventListener('click', ()=>{ aiPanel.hidden = true; });
 
-aiKeyInput.value = aiGetKey();
+aiProviderSelect.addEventListener('change', ()=>{
+  localStorage.setItem(AI_ACTIVE_PROVIDER_STORAGE, aiProviderSelect.value);
+  aiMessages = [];                     // los formatos de mensaje no son compatibles entre proveedores
+  aiMsgsEl.innerHTML = '';
+  aiSnapshot = null; aiUndoBtn.disabled = true;
+  aiRefreshProviderUI();
+  aiRenderMsg('assistant', `Cambiaste a ${aiActiveProvider().label}. Pegá su API key arriba si todavía no lo hiciste.`);
+  log(`IA: proveedor activo → ${aiActiveProvider().label}`);
+});
+
 document.getElementById('aiKeySave').addEventListener('click', ()=>{
   const v = aiKeyInput.value.trim();
   if(!v){ log('Pegá una API key antes de guardar.', 'err'); return; }
-  localStorage.setItem(AI_KEY_STORAGE, v);
-  log('API key de Anthropic guardada en este navegador.', 'ok');
+  localStorage.setItem(aiActiveProvider().keyStorage, v);
+  log(`API key de ${aiActiveProvider().label} guardada en este navegador.`, 'ok');
 });
 document.getElementById('aiKeyClear').addEventListener('click', ()=>{
-  localStorage.removeItem(AI_KEY_STORAGE);
+  localStorage.removeItem(aiActiveProvider().keyStorage);
   aiKeyInput.value = '';
-  log('API key de Anthropic borrada de este navegador.');
+  log(`API key de ${aiActiveProvider().label} borrada de este navegador.`);
 });
 
-aiModelInput.value = aiGetModel();
 aiModelInput.addEventListener('change', ()=>
-  localStorage.setItem(AI_MODEL_STORAGE, aiModelInput.value.trim() || AI_DEFAULT_MODEL));
+  localStorage.setItem(aiActiveProvider().modelStorage, aiModelInput.value.trim()));
 
 aiSendBtn.addEventListener('click', aiHandleSend);
 aiInputEl.addEventListener('keydown', ev=>{
   if(ev.key==='Enter' && !ev.shiftKey){ ev.preventDefault(); aiHandleSend(); }
 });
 aiUndoBtn.addEventListener('click', aiUndoLastTurn);
+aiRefreshProviderUI();
 
 /* ---------------- Arranque ---------------- */
 window.addEventListener('resize', ()=>{ drawGrid(); });

@@ -60,6 +60,7 @@
   .axis-x{stroke:#c0392b;} .axis-y{stroke:#27ae60;}
   .axis{stroke-width:1.2px; vector-effect:non-scaling-stroke; opacity:.85;}
   .gridline{vector-effect:non-scaling-stroke;}
+  .crosshair{pointer-events:none;}   /* es solo un cursor dibujado: no debe interceptar clics */
   .crosshair line{stroke:#9aa6b1; stroke-width:1px;}
   .crosshair rect{stroke:#9aa6b1; fill:none; stroke-width:1px;}
   .osnap{stroke:#58d68d; fill:none; stroke-width:1.6px;}
@@ -77,6 +78,7 @@
     stroke-width:1.4px; vector-effect:non-scaling-stroke;}
   .marquee-window{fill:rgba(64,128,255,.14); stroke:#5b8def; stroke-width:1px;}
   .marquee-crossing{fill:rgba(70,200,120,.13); stroke:#58d68d; stroke-width:1px; stroke-dasharray:5 4;}
+  .marquee-window.erase, .marquee-crossing.erase{fill:rgba(255,90,90,.16); stroke:#e05a5a;}
 
   /* ---------- Panel de capas ---------- */
   #layerPanel{position:absolute; top:12px; right:12px; width:300px; background:var(--panel);
@@ -148,7 +150,7 @@
       <span id="layerSwatch"></span> <span id="layerName">0</span> ▾
     </button>
     <div class="sep"></div>
-    <button class="tbtn" id="btnErase">✕ Borrar selección</button>
+    <button class="tbtn" data-tool="erase" title="Active y luego haga clic sobre una entidad, o arrastre una ventana/captura, para borrar">✕ Borrar selección</button>
     <button class="tbtn" id="btnClear">Limpiar todo</button>
     <div class="sep"></div>
     <button class="tbtn" id="btnExtents">⤢ Zoom extensión</button>
@@ -252,6 +254,19 @@ function log(msg, cls=''){
 function setPrompt(t){ promptEl.textContent = t; }
 
 /* ---------------- Zoom / encuadre ---------------- */
+// El paneo/zoom lo resuelve el transform de gZoom: líneas, círculos, rects y
+// sombreados están en coordenadas de mundo y no necesitan reconstruirse. Solo
+// las cotas deben rehacerse (para mantener flechas/texto a tamaño de pantalla
+// constante), y solo cuando cambia la escala k, no en un paneo puro.
+let lastZoomK = null;
+function refreshDimsOnZoom(){
+  const k = d3.zoomTransform(svgNode).k;
+  gShapes.selectAll('g.shape').each(function(d){
+    if(d.type!=='dim') return;
+    buildDim(d3.select(this), d);
+    this.__dimKey = `${d.x1}|${d.y1}|${d.x2}|${d.y2}|${d.off}|${layerOf(d).color}|${k}`;
+  });
+}
 const zoom = d3.zoom()
   .scaleExtent([0.02, 400])
   .filter(ev => {
@@ -259,7 +274,12 @@ const zoom = d3.zoom()
     if (ev.type === 'dblclick') return false;
     return ev.button === 1;   // encuadre solo con botón central (izq. = ventana de selección)
   })
-  .on('zoom', ev => { gZoom.attr('transform', ev.transform); drawGrid(); render(); renderPreview(); });
+  .on('zoom', ev => {
+    gZoom.attr('transform', ev.transform);
+    drawGrid();
+    if(ev.transform.k !== lastZoomK){ lastZoomK = ev.transform.k; refreshDimsOnZoom(); }
+    renderPreview();
+  });
 
 svg.call(zoom).on('dblclick.zoom', null);
 
@@ -290,8 +310,7 @@ function drawGrid(){
   minorStep = Math.pow(10, Math.ceil(Math.log10(8 / t.k)));
   const major = minorStep * 10;
 
-  gGrid.selectAll('*').remove();
-  if(!gridOn) { drawAxes(x0,x1,yMin,yMax); return; }
+  if(!gridOn) { gGrid.selectAll('*').remove(); drawAxes(x0,x1,yMin,yMax); return; }
 
   const lines = [];
   for(let x = Math.floor(x0/minorStep)*minorStep; x <= x1; x += minorStep)
@@ -358,6 +377,7 @@ function render(){
     if(justMarqueed){ ev.stopPropagation(); justMarqueed = false; return; }
     if(tool==='trim'){ ev.stopPropagation(); trimEntity(d, mouseW); return; }
     if(tool==='break' && !breakState){ ev.stopPropagation(); breakFirst(d, cursorPoint(null)); return; }
+    if(tool==='erase'){ ev.stopPropagation(); eraseOne(d); return; }
     if(tool!=='select') return;   // en modo sombreado el clic pasa al lienzo (punto interior)
     ev.stopPropagation();
     if(layerOf(d).locked){ log(`La capa "${layerOf(d).name}" está bloqueada.`); return; }
@@ -365,14 +385,20 @@ function render(){
     render();
   };
 
-  // sombreados: capa inferior, reconstruidos en cada pasada
+  // sombreados: capa inferior. Solo se reconstruyen si son nuevos o cambió
+  // su patrón/escala/color — si no, un render() por agregar otra entidad
+  // no debería tocarlos (con muchos sombreados, reconstruirlos todos en
+  // cada clic es lo que causa el retraso al dibujar).
   const hj = gHatch.selectAll('g.hatch')
     .data(visibles.filter(s=>s.type==='hatch'), d=>d.id);
   hj.enter().append('g').attr('class','hatch').on('click', onShapeClick);
   hj.exit().remove();
   gHatch.selectAll('g.hatch')
     .classed('selected', d=>!!d.selected)
-    .each(function(d){ buildHatch(d3.select(this), d); });
+    .each(function(d){
+      const key = `${d.pattern}|${d.scale}|${layerOf(d).color}`;
+      if(this.__hatchKey !== key){ buildHatch(d3.select(this), d); this.__hatchKey = key; }
+    });
 
   const g = gShapes.selectAll('g.shape')
     .data(visibles.filter(s=>s.type!=='hatch'), d=>d.id);
@@ -393,7 +419,13 @@ function render(){
     .each(function(d){
       const sel = d3.select(this);
       const col = layerOf(d).color;
-      if(d.type==='dim'){ buildDim(sel, d); return; }
+      if(d.type==='dim'){
+        // igual que con los sombreados: solo reconstruir si algo relevante cambió.
+        const k = d3.zoomTransform(svgNode).k;
+        const key = `${d.x1}|${d.y1}|${d.x2}|${d.y2}|${d.off}|${col}|${k}`;
+        if(this.__dimKey !== key){ buildDim(sel, d); this.__dimKey = key; }
+        return;
+      }
       if(d.type==='line')
         sel.selectAll('line').attr('x1',d.x1).attr('y1',d.y1).attr('x2',d.x2).attr('y2',d.y2);
       if(d.type==='circle')
@@ -842,6 +874,7 @@ const PROMPTS = {
   hatch:  ['SOMBREA  Designe un punto interno del área a sombrear o [Patrón (P) · Escala (número)]:'],
   trim:   ['RECORTA  Designe el tramo del objeto que desea recortar:'],
   break:  ['PARTE  Designe la línea en el primer punto de ruptura:'],
+  erase:  ['BORRA  Haga clic sobre cada entidad que desea borrar:'],
 };
 
 function startTool(name){
@@ -852,6 +885,7 @@ function startTool(name){
   if(name === 'select'){ setPrompt('Comando:'); return; }
   lastCmd = name;
   if(name==='hatch'){ hatchPrompt(); return; }
+  if(name==='erase'){ eraseSelected(true); setPrompt(PROMPTS.erase[0]); return; }
   setPrompt(PROMPTS[name][0]);
 }
 
@@ -1050,6 +1084,7 @@ function runCommand(text){
     case 'ayuda': case 'help': case '?':
       log('Comandos: L línea · C círculo · R rectángulo · D cota · H sombrea · T recorta · X parte · S seleccionar · B borrar · LIMPIA · ZE zoom ext. · ORTO · FORZC · REFENT · REJILLA');
       log('Selección por área (S): arrastre izq→der = VENTANA azul (solo lo totalmente dentro) · der→izq = CAPTURA verde (todo lo que toque el área). Lo capturado se suma a la selección; clic en vacío deselecciona.');
+      log('BORRA (✕ Borrar selección): clic sobre una entidad la borra al instante. También admite arrastrar VENTANA/CAPTURA (igual que en Seleccionar, en rojo) para borrar varias de una vez.');
       log('RECORTA (T): clic sobre el tramo sobrante; se elimina hasta las intersecciones con otras entidades. PARTE (X): clic en dos puntos de una línea para quitar el tramo entre ellos (mismo punto = solo dividir).');
       log('SOMBREA (H): clic DENTRO del área cerrada (círculo, rectángulo o contorno de líneas); se rellena la región más pequeña que contenga el punto. P cambia el patrón (SÓLIDO/HORIZONTAL/ANSI31/CRUZ/PUNTOS), un número fija la escala.');
       log('Capas: CAPA abre el administrador · NUEVACAPA [nombre] crea una capa · ⇪ mueve la selección a la capa actual.');
@@ -1063,12 +1098,18 @@ function runCommand(text){
 }
 
 /* ---------------- Acciones ---------------- */
-function eraseSelected(){
+function eraseSelected(quiet=false){
   const n = shapes.filter(s=>s.selected).length;
-  if(!n){ log('Nada seleccionado. Use el modo Seleccionar (S) y haga clic en entidades.', 'err'); return; }
+  if(!n){ if(!quiet) log('Nada seleccionado. Use el modo Seleccionar (S) y haga clic en entidades.', 'err'); return; }
   shapes = shapes.filter(s=>!s.selected);
   render();
   log(`${n} entidad(es) borrada(s).`, 'ok');
+}
+function eraseOne(d){          // modo BORRA: clic sobre una entidad la borra al instante
+  if(layerOf(d).locked){ log(`La capa "${layerOf(d).name}" está bloqueada.`, 'err'); return; }
+  shapes = shapes.filter(s => s !== d);
+  render();
+  log('Entidad borrada.', 'ok');
 }
 function clearAll(){
   if(!shapes.length) return;
@@ -1268,6 +1309,17 @@ function doMarqueeSelect(){
   const R = {x0:Math.min(a.x,b.x), x1:Math.max(a.x,b.x),
              y0:Math.min(a.y,b.y), y1:Math.max(a.y,b.y)};
   const crossing = marquee.mx < marquee.sx;     // der→izq = captura
+  if(tool==='erase'){                // modo BORRA: la ventana/captura borra en el acto
+    const before = shapes.length;
+    shapes = shapes.filter(s=>{
+      const ly = layerOf(s);
+      if(!ly.visible || ly.locked) return true;
+      return !(crossing ? entityCrossing(s,R) : entityInWindow(s,R));
+    });
+    render();
+    log(`${crossing?'Captura':'Ventana'}: ${before-shapes.length} entidad(es) borrada(s).`, 'ok');
+    return;
+  }
   let n = 0;
   for(const s of shapes){
     const ly = layerOf(s);
@@ -1281,8 +1333,9 @@ function doMarqueeSelect(){
 function drawMarquee(){
   gMarquee.selectAll('*').remove();
   if(!marquee || !marquee.active) return;
+  const cls = marquee.mx < marquee.sx ? 'marquee-crossing' : 'marquee-window';
   gMarquee.append('rect')
-    .attr('class', marquee.mx < marquee.sx ? 'marquee-crossing' : 'marquee-window')
+    .attr('class', tool==='erase' ? `${cls} erase` : cls)
     .attr('x', Math.min(marquee.sx, marquee.mx))
     .attr('y', Math.min(marquee.sy, marquee.my))
     .attr('width',  Math.abs(marquee.mx - marquee.sx))
@@ -1292,7 +1345,7 @@ function drawMarquee(){
 
 /* ---------------- Eventos de ratón ---------------- */
 svg.on('mousedown', ev => {
-  if(ev.button!==0 || tool!=='select') return;
+  if(ev.button!==0 || (tool!=='select' && tool!=='erase')) return;
   const [mx,my] = d3.pointer(ev, svgNode);
   marquee = {sx:mx, sy:my, mx, my, active:false};
 });
@@ -1343,6 +1396,10 @@ svg.on('click', ev => {
     else log('Nada designado: haga clic sobre la línea en el primer punto de ruptura.', 'err');
     return;
   }
+  if(tool==='erase'){
+    log('Nada designado: haga clic sobre la entidad que desea borrar.', 'err');
+    return;
+  }
   const p = cursorPoint(pending.length ? pending[pending.length-1] : null);
   addPoint(p);
 });
@@ -1389,7 +1446,6 @@ document.addEventListener('keydown', ev => {
 /* ---------------- Botones ---------------- */
 document.querySelectorAll('.tbtn[data-tool]').forEach(b =>
   b.addEventListener('click', ()=> startTool(b.dataset.tool)));
-document.getElementById('btnErase').addEventListener('click', eraseSelected);
 document.getElementById('btnClear').addEventListener('click', clearAll);
 document.getElementById('btnExtents').addEventListener('click', zoomExtents);
 document.getElementById('tgSnap').addEventListener('click', ()=>setSnap(!snapOn));

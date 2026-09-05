@@ -78,6 +78,7 @@
     stroke-width:1.4px; vector-effect:non-scaling-stroke;}
   .marquee-window{fill:rgba(64,128,255,.14); stroke:#5b8def; stroke-width:1px;}
   .marquee-crossing{fill:rgba(70,200,120,.13); stroke:#58d68d; stroke-width:1px; stroke-dasharray:5 4;}
+  .marquee-window.erase, .marquee-crossing.erase{fill:rgba(255,90,90,.16); stroke:#e05a5a;}
 
   /* ---------- Panel de capas ---------- */
   #layerPanel{position:absolute; top:12px; right:12px; width:300px; background:var(--panel);
@@ -149,7 +150,7 @@
       <span id="layerSwatch"></span> <span id="layerName">0</span> ▾
     </button>
     <div class="sep"></div>
-    <button class="tbtn" data-tool="erase" title="Active y luego haga clic sobre cada entidad para borrarla">✕ Borrar selección</button>
+    <button class="tbtn" data-tool="erase" title="Active y luego haga clic sobre una entidad, o arrastre una ventana/captura, para borrar">✕ Borrar selección</button>
     <button class="tbtn" id="btnClear">Limpiar todo</button>
     <div class="sep"></div>
     <button class="tbtn" id="btnExtents">⤢ Zoom extensión</button>
@@ -1083,6 +1084,7 @@ function runCommand(text){
     case 'ayuda': case 'help': case '?':
       log('Comandos: L línea · C círculo · R rectángulo · D cota · H sombrea · T recorta · X parte · S seleccionar · B borrar · LIMPIA · ZE zoom ext. · ORTO · FORZC · REFENT · REJILLA');
       log('Selección por área (S): arrastre izq→der = VENTANA azul (solo lo totalmente dentro) · der→izq = CAPTURA verde (todo lo que toque el área). Lo capturado se suma a la selección; clic en vacío deselecciona.');
+      log('BORRA (✕ Borrar selección): clic sobre una entidad la borra al instante. También admite arrastrar VENTANA/CAPTURA (igual que en Seleccionar, en rojo) para borrar varias de una vez.');
       log('RECORTA (T): clic sobre el tramo sobrante; se elimina hasta las intersecciones con otras entidades. PARTE (X): clic en dos puntos de una línea para quitar el tramo entre ellos (mismo punto = solo dividir).');
       log('SOMBREA (H): clic DENTRO del área cerrada (círculo, rectángulo o contorno de líneas); se rellena la región más pequeña que contenga el punto. P cambia el patrón (SÓLIDO/HORIZONTAL/ANSI31/CRUZ/PUNTOS), un número fija la escala.');
       log('Capas: CAPA abre el administrador · NUEVACAPA [nombre] crea una capa · ⇪ mueve la selección a la capa actual.');
@@ -1307,6 +1309,17 @@ function doMarqueeSelect(){
   const R = {x0:Math.min(a.x,b.x), x1:Math.max(a.x,b.x),
              y0:Math.min(a.y,b.y), y1:Math.max(a.y,b.y)};
   const crossing = marquee.mx < marquee.sx;     // der→izq = captura
+  if(tool==='erase'){                // modo BORRA: la ventana/captura borra en el acto
+    const before = shapes.length;
+    shapes = shapes.filter(s=>{
+      const ly = layerOf(s);
+      if(!ly.visible || ly.locked) return true;
+      return !(crossing ? entityCrossing(s,R) : entityInWindow(s,R));
+    });
+    render();
+    log(`${crossing?'Captura':'Ventana'}: ${before-shapes.length} entidad(es) borrada(s).`, 'ok');
+    return;
+  }
   let n = 0;
   for(const s of shapes){
     const ly = layerOf(s);
@@ -1320,8 +1333,9 @@ function doMarqueeSelect(){
 function drawMarquee(){
   gMarquee.selectAll('*').remove();
   if(!marquee || !marquee.active) return;
+  const cls = marquee.mx < marquee.sx ? 'marquee-crossing' : 'marquee-window';
   gMarquee.append('rect')
-    .attr('class', marquee.mx < marquee.sx ? 'marquee-crossing' : 'marquee-window')
+    .attr('class', tool==='erase' ? `${cls} erase` : cls)
     .attr('x', Math.min(marquee.sx, marquee.mx))
     .attr('y', Math.min(marquee.sy, marquee.my))
     .attr('width',  Math.abs(marquee.mx - marquee.sx))
@@ -1331,7 +1345,7 @@ function drawMarquee(){
 
 /* ---------------- Eventos de ratón ---------------- */
 svg.on('mousedown', ev => {
-  if(ev.button!==0 || tool!=='select') return;
+  if(ev.button!==0 || (tool!=='select' && tool!=='erase')) return;
   const [mx,my] = d3.pointer(ev, svgNode);
   marquee = {sx:mx, sy:my, mx, my, active:false};
 });

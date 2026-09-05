@@ -252,6 +252,16 @@ function log(msg, cls=''){
 function setPrompt(t){ promptEl.textContent = t; }
 
 /* ---------------- Zoom / encuadre ---------------- */
+// El paneo/zoom lo resuelve el transform de gZoom: líneas, círculos, rects y
+// sombreados están en coordenadas de mundo y no necesitan reconstruirse. Solo
+// las cotas deben rehacerse (para mantener flechas/texto a tamaño de pantalla
+// constante), y solo cuando cambia la escala k, no en un paneo puro.
+let lastZoomK = null;
+function refreshDimsOnZoom(){
+  gShapes.selectAll('g.shape').each(function(d){
+    if(d.type==='dim') buildDim(d3.select(this), d);
+  });
+}
 const zoom = d3.zoom()
   .scaleExtent([0.02, 400])
   .filter(ev => {
@@ -259,7 +269,12 @@ const zoom = d3.zoom()
     if (ev.type === 'dblclick') return false;
     return ev.button === 1;   // encuadre solo con botón central (izq. = ventana de selección)
   })
-  .on('zoom', ev => { gZoom.attr('transform', ev.transform); drawGrid(); render(); renderPreview(); });
+  .on('zoom', ev => {
+    gZoom.attr('transform', ev.transform);
+    drawGrid();
+    if(ev.transform.k !== lastZoomK){ lastZoomK = ev.transform.k; refreshDimsOnZoom(); }
+    renderPreview();
+  });
 
 svg.call(zoom).on('dblclick.zoom', null);
 
@@ -290,8 +305,7 @@ function drawGrid(){
   minorStep = Math.pow(10, Math.ceil(Math.log10(8 / t.k)));
   const major = minorStep * 10;
 
-  gGrid.selectAll('*').remove();
-  if(!gridOn) { drawAxes(x0,x1,yMin,yMax); return; }
+  if(!gridOn) { gGrid.selectAll('*').remove(); drawAxes(x0,x1,yMin,yMax); return; }
 
   const lines = [];
   for(let x = Math.floor(x0/minorStep)*minorStep; x <= x1; x += minorStep)

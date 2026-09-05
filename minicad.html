@@ -72,6 +72,8 @@
   g.shape.selected .dim-text{fill:var(--sel) !important;}
   .dim-prev .dim-arrow{fill:var(--preview) !important;}
   .dim-prev .dim-text{fill:var(--preview) !important;}
+  .text-main{font-family:var(--sans); stroke:none;}
+  g.shape.selected .text-main{fill:var(--sel) !important;}
 
   .hatch-fill{stroke:none;}
   g.hatch.selected .hatch-fill{stroke:var(--sel) !important; stroke-dasharray:6 4;
@@ -201,6 +203,7 @@
     <button class="tbtn" data-tool="rect">▭ Rectángulo <kbd>R</kbd></button>
     <button class="tbtn" data-tool="dim">⟷ Cota <kbd>D</kbd></button>
     <button class="tbtn" data-tool="hatch">▨ Sombreado <kbd>H</kbd></button>
+    <button class="tbtn" data-tool="text" title="Colocar texto">✎ Texto <kbd>A</kbd></button>
     <button class="tbtn" data-tool="trim">✂ Recortar <kbd>T</kbd></button>
     <button class="tbtn" data-tool="break">⊟ Parte <kbd>X</kbd></button>
     <div class="sep"></div>
@@ -319,6 +322,7 @@ const HATCH_PATTERNS = ['solido','horizontal','ansi31','cruz','puntos'];
 const HATCH_LABEL = {solido:'SÓLIDO', horizontal:'HORIZONTAL', ansi31:'ANSI31', cruz:'CRUZ', puntos:'PUNTOS'};
 let hatchPattern = 'solido';
 let hatchScale   = 1;
+let textHeight   = 1;      // altura de texto (TEXTO) en unidades de mundo
 let minorStep = 1;        // paso de rejilla menor actual (también paso de forzcursor)
 
 const cmdInput = document.getElementById('cmd');
@@ -490,7 +494,7 @@ function render(){
   const ge = g.enter().append('g').attr('class','shape').on('click', onShapeClick);
   ge.each(function(d){
     const sel = d3.select(this);
-    if(d.type==='dim') return;                 // las cotas se construyen completas en cada pasada
+    if(d.type==='dim' || d.type==='text') return;   // se construyen completas en cada pasada (ver más abajo)
     for(const cls of ['shape-hit','shape-main']){
       if(d.type==='line')   sel.append('line').attr('class',cls);
       if(d.type==='circle') sel.append('circle').attr('class',cls);
@@ -509,6 +513,11 @@ function render(){
         const k = d3.zoomTransform(svgNode).k;
         const key = `${d.x1}|${d.y1}|${d.x2}|${d.y2}|${d.off}|${col}|${k}`;
         if(this.__dimKey !== key){ buildDim(sel, d); this.__dimKey = key; }
+        return;
+      }
+      if(d.type==='text'){
+        const key = `${d.x}|${d.y}|${d.content}|${d.size}|${col}`;
+        if(this.__textKey !== key){ buildText(sel, d); this.__textKey = key; }
         return;
       }
       if(d.type==='line')
@@ -853,6 +862,17 @@ function buildDim(sel, d, preview=false){
       .attr('x1',q1x).attr('y1',q1y).attr('x2',q2x).attr('y2',q2y);
 }
 
+/* Texto (TEXTO): altura en unidades de mundo (crece/achica con el zoom, como
+   una entidad más del dibujo — a diferencia de la cota, que se mantiene a
+   tamaño de pantalla constante). Mismo truco de scale(1,-1) que buildDim
+   para des-invertir la Y del mundo y que las letras no queden espejadas. */
+function buildText(sel, d){
+  sel.selectAll('*').remove();
+  sel.append('text').attr('class','text-main')
+    .attr('font-size', d.size).attr('fill', layerOf(d).color)
+    .attr('transform', `translate(${d.x},${d.y}) scale(1,-1)`)
+    .text(d.content);
+}
 
 function renderPreview(){
   gPreview.selectAll('*').remove();
@@ -957,10 +977,15 @@ const PROMPTS = {
            'COTA  Precise origen de la segunda línea de referencia:',
            'COTA  Precise ubicación de la línea de cota:'],
   hatch:  ['SOMBREA  Designe un punto interno del área a sombrear o [Patrón (P) · Escala (número)]:'],
+  text:   ['TEXTO  Precise el punto de inserción o [Altura (número)]:', 'TEXTO  Escriba el texto y presione Enter:'],
   trim:   ['RECORTA  Designe el tramo del objeto que desea recortar:'],
   break:  ['PARTE  Designe la línea en el primer punto de ruptura:'],
   erase:  ['BORRA  Haga clic sobre cada entidad que desea borrar:'],
 };
+
+function textPrompt(){
+  setPrompt(`TEXTO  Precise el punto de inserción o [Altura=${textHeight} (número)]:`);
+}
 
 function startTool(name){
   cancelOp(false);
@@ -970,6 +995,7 @@ function startTool(name){
   if(name === 'select'){ setPrompt('Comando:'); return; }
   lastCmd = name;
   if(name==='hatch'){ hatchPrompt(); return; }
+  if(name==='text'){ textPrompt(); return; }
   if(name==='erase'){ eraseSelected(true); setPrompt(PROMPTS.erase[0]); return; }
   setPrompt(PROMPTS[name][0]);
 }
@@ -1021,6 +1047,10 @@ function addPoint(raw){
       render(); endOp();
     }
   }
+  else if(tool==='text'){
+    if(!pending.length){ pending=[p]; setPrompt(PROMPTS.text[1]); }
+    // el contenido se escribe en la línea de comandos (ver runCommand); un clic de más acá no hace nada
+  }
   lastPt = p;
   renderPreview();
 }
@@ -1031,6 +1061,11 @@ function commitCircle(c, r){
   log(`Círculo R=${fmt(r)} en ${fmt(c.x)},${fmt(c.y)}`, 'ok');
   render(); endOp();
 }
+function commitText(pt, content){
+  shapes.push({id:nextId++, type:'text', x:pt.x, y:pt.y, content, size:textHeight, layer:currentLayer});
+  log(`Texto: "${content}"`, 'ok');
+  render(); endOp();
+}
 
 function endOp(){               // termina el comando, vuelve a esperar
   pending = [];
@@ -1039,6 +1074,7 @@ function endOp(){               // termina el comando, vuelve a esperar
   if(tool!=='select') startToolKeep();
 }
 function startToolKeep(){       // mantiene la herramienta lista para repetir
+  if(tool==='text'){ textPrompt(); return; }
   setPrompt(PROMPTS[tool] ? PROMPTS[tool][0] : 'Comando:');
 }
 function finishLine(close=false){
@@ -1088,6 +1124,10 @@ function handleNumber(n){
     if(n<=0){ log('La escala debe ser mayor que 0.', 'err'); return true; }
     hatchScale = n; log(`Escala de sombreado: ${n}`); hatchPrompt(); return true;
   }
+  if(tool==='text' && !pending.length){
+    if(n<=0){ log('La altura de texto debe ser mayor que 0.', 'err'); return true; }
+    textHeight = n; log(`Altura de texto: ${n}`); textPrompt(); return true;
+  }
   if(tool==='circle' && pending.length===1){ commitCircle(pending[0], n); return true; }
   // entrada de distancia directa: hacia el cursor desde el último punto
   if((tool==='line'||tool==='rect') && pending.length){
@@ -1108,6 +1148,7 @@ const COMMANDS = {
   's':'select','sel':'select','seleccionar':'select',
   'd':'dim','cota':'dim','dim':'dim','acota':'dim','acotar':'dim','dimension':'dim','dimensión':'dim',
   'h':'hatch','sombrea':'hatch','sombreado':'hatch','hatch':'hatch','relleno':'hatch','rellenar':'hatch',
+  'a':'text','txt':'text','texto':'text','text':'text','rotulo':'text','rótulo':'text',
   't':'trim','recorta':'trim','recortar':'trim','trim':'trim','tr':'trim',
   'x':'break','parte':'break','partir':'break','corta':'break','cortar':'break','break':'break',
 };
@@ -1115,11 +1156,12 @@ const COMMANDS = {
 /* Texto de ayuda: lo usan tanto el comando AYUDA como el prompt de sistema
    de la IA (ver más abajo), para no mantener la gramática documentada dos veces. */
 const HELP_LINES = [
-  'Comandos: L línea · C círculo · R rectángulo · D cota · H sombrea · T recorta · X parte · S seleccionar · B borrar · LIMPIA · ZE zoom ext. · ORTO · FORZC · REFENT · REJILLA',
+  'Comandos: L línea · C círculo · R rectángulo · D cota · H sombrea · A texto · T recorta · X parte · S seleccionar · B borrar · LIMPIA · ZE zoom ext. · ORTO · FORZC · REFENT · REJILLA',
   'Selección por área (S): arrastre izq→der = VENTANA azul (solo lo totalmente dentro) · der→izq = CAPTURA verde (todo lo que toque el área). Lo capturado se suma a la selección; clic en vacío deselecciona.',
   'BORRA (✕ Borrar selección): clic sobre una entidad la borra al instante. También admite arrastrar VENTANA/CAPTURA (igual que en Seleccionar, en rojo) para borrar varias de una vez.',
   'RECORTA (T): clic sobre el tramo sobrante; se elimina hasta las intersecciones con otras entidades. PARTE (X): clic en dos puntos de una línea para quitar el tramo entre ellos (mismo punto = solo dividir).',
   'SOMBREA (H): clic DENTRO del área cerrada (círculo, rectángulo o contorno de líneas); se rellena la región más pequeña que contenga el punto. P cambia el patrón (SÓLIDO/HORIZONTAL/ANSI31/CRUZ/PUNTOS), un número fija la escala.',
+  'TEXTO (A): clic para el punto de inserción y después escriba el texto en la línea de comandos (Enter lo coloca). Un número antes de designar el punto fija la Altura.',
   'Capas: CAPA abre el administrador · NUEVACAPA [nombre] crea una capa · ⇪ mueve la selección a la capa actual.',
   'COTA (D): 2 puntos a medir + 1 clic para ubicar la línea de cota. Use REFENT para tomar los extremos exactos.',
   'REFENT (F3): el cursor salta a puntos finales ▢, medios △, centros ◯ y cuadrantes ◇ de las entidades.',
@@ -1128,6 +1170,13 @@ const HELP_LINES = [
 ];
 
 function runCommand(text){
+  if(tool==='text' && pending.length===1){    // el próximo Enter es el contenido literal del texto, no una coordenada/comando
+    const content = text.trim();
+    if(!content){ log('El texto no puede estar vacío.', 'err'); return; }
+    log(`Texto: ${text}`, 'echo');
+    commitText(pending[0], content);
+    return;
+  }
   const t = text.trim().toLowerCase();
 
   if(t==='' ){
@@ -1207,6 +1256,10 @@ function clearAll(){
   shapes = []; render();
   log('Dibujo limpiado.', 'ok');
 }
+/* Ancho/alto aproximados de una entidad de texto (no medimos el DOM: alcanza
+   para encuadrar/seleccionar, no hace falta que sea exacto al píxel). */
+const textBounds = s => ({ w: s.size*0.6*s.content.length, h: s.size*1.2 });
+
 function zoomExtents(){
   if(!shapes.length){ initialView(); drawGrid(); return; }
   let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
@@ -1226,6 +1279,10 @@ function zoomExtents(){
       for(const [px_,py_] of [[s.x1,s.y1],[s.x2,s.y2],[s.x1+nx,s.y1+ny],[s.x2+nx,s.y2+ny]]){
         x0=Math.min(x0,px_); x1=Math.max(x1,px_); y0=Math.min(y0,py_); y1=Math.max(y1,py_);
       }
+    }
+    if(s.type==='text'){
+      const tb = textBounds(s);
+      x0=Math.min(x0,s.x); x1=Math.max(x1,s.x+tb.w); y0=Math.min(y0,s.y); y1=Math.max(y1,s.y+tb.h);
     }
   }
   const [w,h]=viewSize(), pad=1.15;
@@ -1362,6 +1419,10 @@ function entityInWindow(s, R){
     if(s.kind==='rect')   return s.x>=R.x0 && s.x+s.w<=R.x1 && s.y>=R.y0 && s.y+s.h<=R.y1;
     return s.pts.every(p => inRect(p,R));
   }
+  if(s.type==='text'){
+    const tb = textBounds(s);
+    return s.x>=R.x0 && s.x+tb.w<=R.x1 && s.y>=R.y0 && s.y+tb.h<=R.y1;
+  }
   return false;
 }
 function entityCrossing(s, R){
@@ -1391,6 +1452,10 @@ function entityCrossing(s, R){
              return segCrossesRect({x1:p.x,y1:p.y,x2:q.x,y2:q.y}, R);
            }) ||
            pointInPoly(center, s.pts);
+  }
+  if(s.type==='text'){
+    const tb = textBounds(s);
+    return !(R.x1<s.x || R.x0>s.x+tb.w || R.y1<s.y || R.y0>s.y+tb.h);
   }
   return false;
 }
@@ -1528,6 +1593,7 @@ document.addEventListener('keydown', ev => {
   else if(k==='r') startTool('rect');
   else if(k==='d') startTool('dim');
   else if(k==='h') startTool('hatch');
+  else if(k==='a') startTool('text');
   else if(k==='t') startTool('trim');
   else if(k==='x') startTool('break');
   else if(k==='s') startTool('select');
@@ -1827,7 +1893,7 @@ const AI_SYSTEM_PROMPT = `Sos el asistente de MiniCAD, un programa mínimo de di
 Traducís pedidos en lenguaje natural en acciones concretas sobre el dibujo, usando SOLO las tools disponibles. Nunca asumas ni inventes qué hay dibujado: si el pedido depende de eso ("ese círculo", "la selección", "todo lo de la capa X", "borrá lo último"), llamá primero a list_entities y/o list_layers.
 
 Reglas:
-- Las tools dedicadas (draw_line, draw_circle, draw_rect, add_dimension, add_layer, set_current_layer, delete_entities) alcanzan para geometría simple y manejo de capas.
+- Las tools dedicadas (draw_line, draw_circle, draw_rect, add_dimension, add_text, add_layer, set_current_layer, delete_entities) alcanzan para geometría simple, texto y manejo de capas.
 - Para cualquier otra cosa (recortar, partir, sombrear, seleccionar por ventana, abrir un DXF, ORTO/FORZC/REFENT/REJILLA, zoom, limpiar todo, o encadenar los puntos de un comando de dibujo) usá run_raw_command con la sintaxis exacta de MiniCAD:
   ${HELP_LINES.join('\n  ')}
 - Un comando por puntos (línea, círculo, rectángulo, cota) se hace con varias llamadas seguidas a run_raw_command, una por cada línea que tipearía una persona: el nombre del comando, después cada punto, "" para terminar.
@@ -1864,6 +1930,12 @@ const AI_TOOLS = [
       properties:{ x1:{type:'number'}, y1:{type:'number'}, x2:{type:'number'}, y2:{type:'number'},
         offset:{type:'number', description:'Distancia perpendicular con signo; opcional'} },
       required:['x1','y1','x2','y2'], additionalProperties:false }, strict:true },
+  { name:'add_text',
+    description:'Coloca una etiqueta de texto en el punto indicado, en unidades de mundo.',
+    input_schema:{ type:'object',
+      properties:{ x:{type:'number'}, y:{type:'number'}, content:{type:'string', description:'Contenido del texto'},
+        size:{type:'number', description:'Altura del texto en unidades de mundo; opcional, si se omite usa la altura actual'} },
+      required:['x','y','content'], additionalProperties:false }, strict:true },
   { name:'add_layer',
     description:'Crea una capa nueva y la deja como capa actual.',
     input_schema:{ type:'object',
@@ -1960,6 +2032,17 @@ function aiAddDimension(input){
   aiLog(`cota = ${fmt(L)} entre (${fmt(x1)},${fmt(y1)}) y (${fmt(x2)},${fmt(y2)})`, 'ok');
   return {...s, length:L};
 }
+function aiAddText(input){
+  const x=aiNum(input.x,'x'), y=aiNum(input.y,'y');
+  const content = String(input.content ?? '').trim();
+  if(!content) throw new Error('El texto no puede estar vacío.');
+  const size = (input.size===undefined || input.size===null) ? textHeight : aiNum(input.size,'size');
+  if(size<=0) throw new Error('La altura de texto debe ser mayor que 0.');
+  const s = {id:nextId++, type:'text', x,y, content, size, layer:currentLayer};
+  shapes.push(s); render();
+  aiLog(`texto "${content}" en (${fmt(x)},${fmt(y)})`, 'ok');
+  return s;
+}
 function aiAddLayer(input){
   addLayer(input.name ? String(input.name).trim() : undefined);   // ya loguea y deja la capa como actual
   return layers[layers.length-1];
@@ -2007,7 +2090,7 @@ function aiRunRawCommand(input){
 const AI_DISPATCH = {
   list_entities: aiListEntities, list_layers: aiListLayers,
   draw_line: aiDrawLine, draw_circle: aiDrawCircle, draw_rect: aiDrawRect,
-  add_dimension: aiAddDimension, add_layer: aiAddLayer, set_current_layer: aiSetCurrentLayer,
+  add_dimension: aiAddDimension, add_text: aiAddText, add_layer: aiAddLayer, set_current_layer: aiSetCurrentLayer,
   delete_entities: aiDeleteEntities, run_raw_command: aiRunRawCommand,
 };
 function aiExecuteTool(name, input){

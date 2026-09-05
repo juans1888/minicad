@@ -258,8 +258,11 @@ function setPrompt(t){ promptEl.textContent = t; }
 // constante), y solo cuando cambia la escala k, no en un paneo puro.
 let lastZoomK = null;
 function refreshDimsOnZoom(){
+  const k = d3.zoomTransform(svgNode).k;
   gShapes.selectAll('g.shape').each(function(d){
-    if(d.type==='dim') buildDim(d3.select(this), d);
+    if(d.type!=='dim') return;
+    buildDim(d3.select(this), d);
+    this.__dimKey = `${d.x1}|${d.y1}|${d.x2}|${d.y2}|${d.off}|${layerOf(d).color}|${k}`;
   });
 }
 const zoom = d3.zoom()
@@ -379,14 +382,20 @@ function render(){
     render();
   };
 
-  // sombreados: capa inferior, reconstruidos en cada pasada
+  // sombreados: capa inferior. Solo se reconstruyen si son nuevos o cambió
+  // su patrón/escala/color — si no, un render() por agregar otra entidad
+  // no debería tocarlos (con muchos sombreados, reconstruirlos todos en
+  // cada clic es lo que causa el retraso al dibujar).
   const hj = gHatch.selectAll('g.hatch')
     .data(visibles.filter(s=>s.type==='hatch'), d=>d.id);
   hj.enter().append('g').attr('class','hatch').on('click', onShapeClick);
   hj.exit().remove();
   gHatch.selectAll('g.hatch')
     .classed('selected', d=>!!d.selected)
-    .each(function(d){ buildHatch(d3.select(this), d); });
+    .each(function(d){
+      const key = `${d.pattern}|${d.scale}|${layerOf(d).color}`;
+      if(this.__hatchKey !== key){ buildHatch(d3.select(this), d); this.__hatchKey = key; }
+    });
 
   const g = gShapes.selectAll('g.shape')
     .data(visibles.filter(s=>s.type!=='hatch'), d=>d.id);
@@ -407,7 +416,13 @@ function render(){
     .each(function(d){
       const sel = d3.select(this);
       const col = layerOf(d).color;
-      if(d.type==='dim'){ buildDim(sel, d); return; }
+      if(d.type==='dim'){
+        // igual que con los sombreados: solo reconstruir si algo relevante cambió.
+        const k = d3.zoomTransform(svgNode).k;
+        const key = `${d.x1}|${d.y1}|${d.x2}|${d.y2}|${d.off}|${col}|${k}`;
+        if(this.__dimKey !== key){ buildDim(sel, d); this.__dimKey = key; }
+        return;
+      }
       if(d.type==='line')
         sel.selectAll('line').attr('x1',d.x1).attr('y1',d.y1).attr('x2',d.x2).attr('y2',d.y2);
       if(d.type==='circle')

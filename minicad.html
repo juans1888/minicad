@@ -60,6 +60,7 @@
   .axis-x{stroke:#c0392b;} .axis-y{stroke:#27ae60;}
   .axis{stroke-width:1.2px; vector-effect:non-scaling-stroke; opacity:.85;}
   .gridline{vector-effect:non-scaling-stroke;}
+  .crosshair{pointer-events:none;}   /* es solo un cursor dibujado: no debe interceptar clics */
   .crosshair line{stroke:#9aa6b1; stroke-width:1px;}
   .crosshair rect{stroke:#9aa6b1; fill:none; stroke-width:1px;}
   .osnap{stroke:#58d68d; fill:none; stroke-width:1.6px;}
@@ -148,7 +149,7 @@
       <span id="layerSwatch"></span> <span id="layerName">0</span> ▾
     </button>
     <div class="sep"></div>
-    <button class="tbtn" id="btnErase">✕ Borrar selección</button>
+    <button class="tbtn" data-tool="erase" title="Active y luego haga clic sobre cada entidad para borrarla">✕ Borrar selección</button>
     <button class="tbtn" id="btnClear">Limpiar todo</button>
     <div class="sep"></div>
     <button class="tbtn" id="btnExtents">⤢ Zoom extensión</button>
@@ -375,6 +376,7 @@ function render(){
     if(justMarqueed){ ev.stopPropagation(); justMarqueed = false; return; }
     if(tool==='trim'){ ev.stopPropagation(); trimEntity(d, mouseW); return; }
     if(tool==='break' && !breakState){ ev.stopPropagation(); breakFirst(d, cursorPoint(null)); return; }
+    if(tool==='erase'){ ev.stopPropagation(); eraseOne(d); return; }
     if(tool!=='select') return;   // en modo sombreado el clic pasa al lienzo (punto interior)
     ev.stopPropagation();
     if(layerOf(d).locked){ log(`La capa "${layerOf(d).name}" está bloqueada.`); return; }
@@ -871,6 +873,7 @@ const PROMPTS = {
   hatch:  ['SOMBREA  Designe un punto interno del área a sombrear o [Patrón (P) · Escala (número)]:'],
   trim:   ['RECORTA  Designe el tramo del objeto que desea recortar:'],
   break:  ['PARTE  Designe la línea en el primer punto de ruptura:'],
+  erase:  ['BORRA  Haga clic sobre cada entidad que desea borrar:'],
 };
 
 function startTool(name){
@@ -881,6 +884,7 @@ function startTool(name){
   if(name === 'select'){ setPrompt('Comando:'); return; }
   lastCmd = name;
   if(name==='hatch'){ hatchPrompt(); return; }
+  if(name==='erase'){ eraseSelected(true); setPrompt(PROMPTS.erase[0]); return; }
   setPrompt(PROMPTS[name][0]);
 }
 
@@ -1092,12 +1096,18 @@ function runCommand(text){
 }
 
 /* ---------------- Acciones ---------------- */
-function eraseSelected(){
+function eraseSelected(quiet=false){
   const n = shapes.filter(s=>s.selected).length;
-  if(!n){ log('Nada seleccionado. Use el modo Seleccionar (S) y haga clic en entidades.', 'err'); return; }
+  if(!n){ if(!quiet) log('Nada seleccionado. Use el modo Seleccionar (S) y haga clic en entidades.', 'err'); return; }
   shapes = shapes.filter(s=>!s.selected);
   render();
   log(`${n} entidad(es) borrada(s).`, 'ok');
+}
+function eraseOne(d){          // modo BORRA: clic sobre una entidad la borra al instante
+  if(layerOf(d).locked){ log(`La capa "${layerOf(d).name}" está bloqueada.`, 'err'); return; }
+  shapes = shapes.filter(s => s !== d);
+  render();
+  log('Entidad borrada.', 'ok');
 }
 function clearAll(){
   if(!shapes.length) return;
@@ -1372,6 +1382,10 @@ svg.on('click', ev => {
     else log('Nada designado: haga clic sobre la línea en el primer punto de ruptura.', 'err');
     return;
   }
+  if(tool==='erase'){
+    log('Nada designado: haga clic sobre la entidad que desea borrar.', 'err');
+    return;
+  }
   const p = cursorPoint(pending.length ? pending[pending.length-1] : null);
   addPoint(p);
 });
@@ -1418,7 +1432,6 @@ document.addEventListener('keydown', ev => {
 /* ---------------- Botones ---------------- */
 document.querySelectorAll('.tbtn[data-tool]').forEach(b =>
   b.addEventListener('click', ()=> startTool(b.dataset.tool)));
-document.getElementById('btnErase').addEventListener('click', eraseSelected);
 document.getElementById('btnClear').addEventListener('click', clearAll);
 document.getElementById('btnExtents').addEventListener('click', zoomExtents);
 document.getElementById('tgSnap').addEventListener('click', ()=>setSnap(!snapOn));
